@@ -1,0 +1,11 @@
+{
+  "SiteAutoSignin": {
+    "name": "站点自动签到",
+    "description": "多站点自动签到",
+    "version": "1.0.0",
+    "author": "xiaotian",
+    "level": 1,
+    "release": true,
+    "system_version": ">=3.0.0"
+  }
+}
