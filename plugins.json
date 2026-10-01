@@ -1,0 +1,12 @@
+[
+  {
+    "id": "SiteAutoSignin",
+    "name": "站点自动签到Pro",
+    "url": "https://github.com/xiaotian89/site-auto-signin",
+    "version": "1.0.0",
+    "description": "自动签到MP里的所有站点，支持FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。",
+    "author": "xiaotian",
+    "level": 1,
+    "tags": ["工具", "签到"]
+  }
+]
