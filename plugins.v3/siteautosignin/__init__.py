@@ -86,33 +86,28 @@ class SiteAutoSignin(_PluginBase):
     def get_form(self) -> tuple[list[dict], dict[str, Any]]:
         return [
             {
-                "component": "div",
-                "children": [
-                    {
-                        "component": "el-switch",
-                        "props": {"label": "启用插件", "model": "enabled"},
-                    },
-                    {
-                        "component": "el-input",
-                        "props": {"label": "定时规则", "model": "cron", "placeholder": "0 8 * * *"},
-                    },
-                    {
-                        "component": "el-switch",
-                        "props": {"label": "立即运行一次", "model": "onlyonce"},
-                    },
-                    {
-                        "component": "el-switch",
-                        "props": {"label": "发送通知", "model": "notify"},
-                    },
-                    {
-                        "component": "el-switch",
-                        "props": {"label": "自动过CF", "model": "auto_cf"},
-                    },
-                    {
-                        "component": "el-input-number",
-                        "props": {"label": "并发数", "model": "queue_cnt", "min": 1, "max": 10},
-                    },
-                ]
+                "component": "el-switch",
+                "props": {"label": "启用插件", "model": "enabled"},
+            },
+            {
+                "component": "el-input",
+                "props": {"label": "定时规则", "model": "cron", "placeholder": "0 8 * * *"},
+            },
+            {
+                "component": "el-switch",
+                "props": {"label": "立即运行一次", "model": "onlyonce"},
+            },
+            {
+                "component": "el-switch",
+                "props": {"label": "发送通知", "model": "notify"},
+            },
+            {
+                "component": "el-switch",
+                "props": {"label": "自动过CF", "model": "auto_cf"},
+            },
+            {
+                "component": "el-input-number",
+                "props": {"label": "并发数", "model": "queue_cnt", "min": 1, "max": 10},
             },
         ], {
             "enabled": self._enabled,
