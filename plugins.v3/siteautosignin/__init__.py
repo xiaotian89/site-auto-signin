@@ -1,16 +1,20 @@
-from typing import Any, Optional
+# -*- coding: utf-8 -*-
+"""站点自动签到Pro - 自动签到MP所有站点，支持FlareSolverr过CF"""
+from typing import Any, List, Dict, Optional
 import time
 import random
 import pytz
 from datetime import datetime, timedelta
+
+import httpx
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.background import BackgroundScheduler
+
 from app.log import logger
 from app.plugins import _PluginBase
 from app.core.config import settings
 from app.db.site_oper import SiteOper
 from app.helper.cloudflare import under_challenge
-from app.helper.sites import SitesHelper
 from app.helper.browser import PlaywrightHelper
 from app.utils.http import RequestUtils
 from app.utils.site import SiteUtils
@@ -19,16 +23,26 @@ from app.schemas.types import EventType, NotificationType
 
 
 class SiteAutoSignin(_PluginBase):
-    plugin_version = "1.0.0"
+    # 插件名称
     plugin_name = "站点自动签到Pro"
-    plugin_desc = "自动签到MP里的所有站点，支持自动过CF、滑块验证，随机错峰，微信通知。"
+    # 插件描述
+    plugin_desc = "自动签到MP里所有站点，FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。"
+    # 插件图标
     plugin_icon = "signin.png"
+    # 插件版本
+    plugin_version = "1.0.0"
+    # 插件作者
     plugin_author = "xiaotian"
+    # 作者主页
     author_url = "https://github.com/xiaotian89"
+    # 插件配置项ID前缀
     plugin_config_prefix = "siteautosignin_"
+    # 加载顺序
     plugin_order = 0
+    # 可使用的用户级别
     auth_level = 1
 
+    # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
 
     # 配置属性
@@ -83,32 +97,82 @@ class SiteAutoSignin(_PluginBase):
             "sign_sites": self._sign_sites,
         })
 
+    @staticmethod
+    def get_command() -> List[Dict[str, Any]]:
+        return [{
+            "cmd": "/pro_signin",
+            "event": EventType.PluginAction,
+            "desc": "手动执行站点自动签到Pro",
+            "category": "站点",
+            "data": {"action": "pro_signin"}
+        }]
+
+    def get_api(self) -> List[Dict[str, Any]]:
+        return []
+
+    def get_service(self) -> List[Dict[str, Any]]:
+        if self._enabled and self._cron:
+            try:
+                return [{
+                    "id": "SiteAutoSignin.daily_signin",
+                    "name": "每日站点自动签到Pro",
+                    "trigger": CronTrigger.from_crontab(self._cron),
+                    "func": self.sign_in,
+                    "kwargs": {},
+                }]
+            except Exception as e:
+                logger.error(f"定时任务配置错误: {str(e)}")
+        return []
+
     def get_form(self) -> tuple[list[dict], dict[str, Any]]:
         return [
             {
-                "component": "el-switch",
-                "props": {"label": "启用插件", "model": "enabled"},
-            },
-            {
-                "component": "el-input",
-                "props": {"label": "定时规则", "model": "cron", "placeholder": "0 8 * * *"},
-            },
-            {
-                "component": "el-switch",
-                "props": {"label": "立即运行一次", "model": "onlyonce"},
-            },
-            {
-                "component": "el-switch",
-                "props": {"label": "发送通知", "model": "notify"},
-            },
-            {
-                "component": "el-switch",
-                "props": {"label": "自动过CF", "model": "auto_cf"},
-            },
-            {
-                "component": "el-input-number",
-                "props": {"label": "并发数", "model": "queue_cnt", "min": 1, "max": 10},
-            },
+                "component": "VForm",
+                "content": [
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件", "color": "#4CAF50"}},
+                        ]
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VTextField", "props": {"model": "cron", "label": "签到时间(Cron)", "placeholder": "0 8 * * *", "variant": "outlined"}},
+                        ]
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "onlyonce", "label": "保存后立即执行一次", "color": "#9C27B0"}},
+                        ]
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "notify", "label": "签到结果微信通知", "color": "#2196F3"}},
+                        ]
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "auto_cf", "label": "自动过CF/滑块", "color": "#FF9800"}},
+                        ]
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VTextField", "props": {"model": "queue_cnt", "label": "并发数(1-10)", "type": "number", "variant": "outlined"}},
+                        ]
+                    },
+                ]
+            }
         ], {
             "enabled": self._enabled,
             "cron": self._cron,
@@ -119,25 +183,18 @@ class SiteAutoSignin(_PluginBase):
             "sign_sites": self._sign_sites,
         }
 
-    def get_service(self) -> list[dict]:
-        if self._enabled and self._cron:
-            try:
-                return [{
-                    "id": "SiteAutoSignin.daily_signin",
-                    "name": "每日站点自动签到",
-                    "trigger": CronTrigger.from_crontab(self._cron),
-                    "func": self.sign_in,
-                    "kwargs": {},
-                }]
-            except Exception as e:
-                logger.error(f"定时任务配置错误: {str(e)}")
-        return []
-
-    def get_api(self) -> list[dict]:
-        return []
-
-    def get_page(self) -> Optional[str]:
-        return None
+    def get_page(self) -> list[dict]:
+        return [
+            {
+                "component": "div",
+                "props": {"class": "pa-3"},
+                "content": [
+                    {"component": "div", "props": {"class": "text-h6 mb-2"}, "text": "站点自动签到Pro"},
+                    {"component": "div", "props": {"class": "text-body-2"}, "text": "自动签到MP里所有已添加站点，优先调用FlareSolverr过CF验证，失败自动降级Playwright浏览器渲染。"},
+                    {"component": "div", "props": {"class": "text-body-2 mt-2"}, "text": "FlareSolverr地址: http://192.168.2.70:8191"},
+                ]
+            }
+        ]
 
     def stop_service(self):
         if self._scheduler:
@@ -152,9 +209,7 @@ class SiteAutoSignin(_PluginBase):
                 "cmd": "request.get",
                 "url": url,
                 "maxTimeout": 60000,
-                "headers": {
-                    "Cookie": cookie
-                }
+                "headers": {"Cookie": cookie}
             }
             resp = RequestUtils(timeout=70).post_res(url=flare_url, json=payload)
             if resp and resp.status_code == 200:
@@ -180,7 +235,6 @@ class SiteAutoSignin(_PluginBase):
 
         for site in sites:
             try:
-                # 随机错峰
                 time.sleep(random.uniform(2, 10))
 
                 site_name = site.name
@@ -192,33 +246,12 @@ class SiteAutoSignin(_PluginBase):
                     continue
 
                 logger.info(f"签到: {site_name}")
-
-                # 先访问首页
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Cookie": site_cookie,
-                }
-
-                session = RequestUtils(headers=headers, timeout=15)
-
-                # 检查CF
-                if self._auto_cf:
-                    try:
-                        resp = session.get_res(url=site_url)
-                        if resp and under_challenge(resp.text):
-                            logger.warning(f"{site_name}: CF挑战，跳过")
-                            results.append(f"⚠️ {site_name}: CF挑战，需手动过")
-                            continue
-                    except Exception as e:
-                        logger.error(f"{site_name}: 访问失败 {str(e)}")
-
-                # 访问签到页
                 sign_url = f"{site_url}/attendance.php"
 
-                # 优先用FlareSolverr过CF
+                # 优先FlareSolverr
                 page_source = self.__get_flaresolverr_page(sign_url, site_cookie)
 
-                # FlareSolverr失败了再用Playwright
+                # 失败降级Playwright
                 if not page_source:
                     page_source = PlaywrightHelper().get_page_source(
                         url=sign_url,
@@ -228,20 +261,13 @@ class SiteAutoSignin(_PluginBase):
                     )
 
                 if page_source:
-                    # 检查CF
                     if under_challenge(page_source):
-                        logger.warning(f"{site_name}: CF挑战，无法通过")
-                        results.append(f"⚠️ {site_name}: CF挑战，无法通过")
+                        results.append(f"⚠️ {site_name}: CF挑战无法通过")
                         continue
-
-                    # 判断登录状态
                     if not SiteUtils.is_logged_in(page_source):
                         results.append(f"❌ {site_name}: Cookie失效")
                         continue
-
-                    # 判断签到结果
-                    if "签到成功" in page_source or "已签到" in page_source or "重复签到" in page_source or SiteUtils.is_checkin(page_source):
-                        logger.info(f"{site_name}: 签到成功")
+                    if "签到成功" in page_source or "已签到" in page_source or SiteUtils.is_checkin(page_source):
                         results.append(f"✅ {site_name}: 签到成功")
                     else:
                         results.append(f"✅ {site_name}: 签到请求已发送")
@@ -252,13 +278,7 @@ class SiteAutoSignin(_PluginBase):
                 logger.error(f"{site.name}: 签到异常 {str(e)}")
                 results.append(f"❌ {site.name}: 异常 {str(e)}")
 
-        # 发送通知
         if self._notify:
             notify_text = "站点签到结果：\n" + "\n".join(results)
             logger.info(notify_text)
-            eventmanager.send_event(
-                EventType.PluginAction,
-                {
-                    "text": notify_text,
-                }
-            )
+            eventmanager.send_event(EventType.PluginAction, {"text": notify_text})
