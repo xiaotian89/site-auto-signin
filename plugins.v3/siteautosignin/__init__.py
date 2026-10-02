@@ -138,6 +138,12 @@ class SiteAutoSignin(_PluginBase):
                 logger.error(f"定时任务配置错误: {str(e)}")
         return []
 
+    def get_api(self) -> list[dict]:
+        return []
+
+    def get_page(self) -> Optional[str]:
+        return None
+
     def stop_service(self):
         if self._scheduler:
             self._scheduler.shutdown(wait=False)
@@ -191,6 +197,25 @@ class SiteAutoSignin(_PluginBase):
                     continue
 
                 logger.info(f"签到: {site_name}")
+
+                # 先访问首页
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Cookie": site_cookie,
+                }
+
+                session = RequestUtils(headers=headers, timeout=15)
+
+                # 检查CF
+                if self._auto_cf:
+                    try:
+                        resp = session.get_res(url=site_url)
+                        if resp and under_challenge(resp.text):
+                            logger.warning(f"{site_name}: CF挑战，跳过")
+                            results.append(f"⚠️ {site_name}: CF挑战，需手动过")
+                            continue
+                    except Exception as e:
+                        logger.error(f"{site_name}: 访问失败 {str(e)}")
 
                 # 访问签到页
                 sign_url = f"{site_url}/attendance.php"
