@@ -1,15 +1,15 @@
 {
-  "SiteAutoSignin": {
+  "siteautosignin": {
     "name": "站点自动签到Pro",
     "description": "自动签到MP里所有站点，支持FlareSolverr+Playwright自动过CF滑块、人机验证，随机错峰，微信通知。",
     "labels": "工具,签到",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
-    "level": 1,
+    "level": 2,
     "system_version": ">=3.0.0",
     "history": {
-      "v1.0.0": "首次发布：自动签到MP所有站点，FlareSolverr+Playwright过CF，随机错峰，微信通知"
+      "v1.1.0": "修复插件ID大小写问题，完整对齐官方AutoSignIn界面"
     }
   }
 }
