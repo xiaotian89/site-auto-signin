@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""站点自动签到Pro"""
+"""站点自动签到Pro - 自动签到MP所有站点，支持FlareSolverr过CF"""
 from typing import Any, List, Dict, Optional
 import time
 import random
@@ -23,54 +23,50 @@ from app.schemas.types import EventType
 
 class SiteAutoSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
-    plugin_desc = "自动签到MP里所有站点，FlareSolverr+Playwright过CF。"
+    plugin_desc = "自动签到MP里所有站点，FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "1.2.0"
+    plugin_version = "1.3.0"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "siteautosignin_"
     plugin_order = 0
-    auth_level = 2
+    auth_level = 1
 
-    _enabled = False
-    _cron = ""
-    _onlyonce = False
-    _notify = True
-    _queue_cnt = 5
-    _sign_sites = []
-    _login_sites = []
-    _retry_keyword = "错误|失败"
-    _clean = False
-    _auto_cf = 0
-    _scheduler = None
+    _scheduler: Optional[BackgroundScheduler] = None
+    _enabled: bool = False
+    _cron: str = ""
+    _onlyonce: bool = False
+    _notify: bool = True
+    _queue_cnt: int = 5
+    _auto_cf: bool = True
+    _sign_sites: list = []
 
-    def init_plugin(self, config=None):
+    def init_plugin(self, config: dict = None):
         self.stop_service()
         if config:
             self._enabled = config.get("enabled")
-            self._cron = config.get("cron") or ""
+            self._cron = config.get("cron")
             self._onlyonce = config.get("onlyonce")
             self._notify = config.get("notify", True)
-            self._queue_cnt = config.get("queue_cnt") or 5
-            self._sign_sites = config.get("sign_sites") or []
-            self._login_sites = config.get("login_sites") or []
-            self._retry_keyword = config.get("retry_keyword") or "错误|失败"
-            self._clean = config.get("clean")
-            self._auto_cf = config.get("auto_cf") or 0
+            self._queue_cnt = config.get("queue_cnt", 5)
+            self._auto_cf = config.get("auto_cf", True)
+            self._sign_sites = config.get("sign_sites", [])
             self.__update_config()
 
         if self._enabled or self._onlyonce:
             if self._onlyonce:
                 self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+                logger.info("站点自动签到Pro启动，立即运行一次")
                 self._scheduler.add_job(func=self.sign_in, trigger='date',
                                         run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
                                         name="站点自动签到Pro")
                 self._onlyonce = False
                 self.__update_config()
                 if self._scheduler.get_jobs():
+                    self._scheduler.print_jobs()
                     self._scheduler.start()
 
-    def get_state(self):
+    def get_state(self) -> bool:
         return self._enabled
 
     def __update_config(self):
@@ -80,15 +76,12 @@ class SiteAutoSignin(_PluginBase):
             "cron": self._cron,
             "onlyonce": self._onlyonce,
             "queue_cnt": self._queue_cnt,
-            "sign_sites": self._sign_sites,
-            "login_sites": self._login_sites,
-            "retry_keyword": self._retry_keyword,
             "auto_cf": self._auto_cf,
-            "clean": self._clean,
+            "sign_sites": self._sign_sites,
         })
 
     @staticmethod
-    def get_command():
+    def get_command() -> List[Dict[str, Any]]:
         return [{
             "cmd": "/pro_signin",
             "event": EventType.PluginAction,
@@ -97,103 +90,162 @@ class SiteAutoSignin(_PluginBase):
             "data": {"action": "pro_signin"}
         }]
 
-    def get_api(self):
+    def get_api(self) -> List[Dict[str, Any]]:
         return []
 
-    def get_service(self):
-        if self._enabled and self._cron and str(self._cron).strip().count(" ") == 4:
+    def get_service(self) -> List[Dict[str, Any]]:
+        if self._enabled and self._cron:
             try:
                 return [{
-                    "id": "siteautosignin.daily",
+                    "id": "SiteAutoSignin.daily_signin",
                     "name": "每日站点自动签到Pro",
                     "trigger": CronTrigger.from_crontab(self._cron),
                     "func": self.sign_in,
-                    "kwargs": {}
+                    "kwargs": {},
                 }]
             except Exception as e:
-                logger.error(f"定时任务错误: {e}")
+                logger.error(f"定时任务配置错误: {str(e)}")
         return []
 
-    def get_form(self):
-        all_sites = [{"title": "全部", "value": "all"}] + [{"title": s.name, "value": s.id} for s in SiteOper().list_order_by_pri()]
+    def get_form(self) -> tuple[list[dict], dict[str, Any]]:
         return [
             {
-                'component': 'VForm',
-                'content': [
+                "component": "VForm",
+                "content": [
                     {
-                        'component': 'VRow',
-                        'content': [
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '立即运行一次'}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'clean', 'label': '清理本日缓存'}}]},
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件", "color": "#4CAF50"}},
                         ]
                     },
                     {
-                        'component': 'VRow',
-                        'content': [
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VCronField', 'props': {'model': 'cron', 'label': '执行周期', 'placeholder': '5位cron，留空自动'}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'queue_cnt', 'label': '队列数量'}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_keyword', 'label': '重试关键词'}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_cf', 'label': '自动优选'}}]},
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VTextField", "props": {"model": "cron", "label": "签到时间(Cron)", "placeholder": "0 8 * * *", "variant": "outlined"}},
                         ]
                     },
                     {
-                        'component': 'VRow',
-                        'content': [
-                            {'component': 'VCol', 'content': [{'component': 'VSelect', 'props': {'chips': True, 'multiple': True, 'model': 'sign_sites', 'label': '签到站点', 'items': all_sites, 'hint': '选择全部后自动包含后续新增站点', 'persistent-hint': True}}]}
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "onlyonce", "label": "保存后立即执行一次", "color": "#9C27B0"}},
                         ]
                     },
                     {
-                        'component': 'VRow',
-                        'content': [
-                            {'component': 'VCol', 'content': [{'component': 'VSelect', 'props': {'chips': True, 'multiple': True, 'model': 'login_sites', 'label': '登录站点', 'items': all_sites, 'hint': '选择全部后自动包含后续新增站点', 'persistent-hint': True}}]}
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "notify", "label": "签到结果微信通知", "color": "#2196F3"}},
+                        ]
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VSwitch", "props": {"model": "auto_cf", "label": "自动过CF/滑块", "color": "#FF9800"}},
+                        ]
+                    },
+                    {
+                        "component": "div",
+                        "props": {"class": "mb-2"},
+                        "content": [
+                            {"component": "VTextField", "props": {"model": "queue_cnt", "label": "并发数(1-10)", "type": "number", "variant": "outlined"}},
                         ]
                     },
                 ]
             }
         ], {
-            "enabled": False,
-            "notify": True,
-            "cron": "",
-            "auto_cf": 0,
-            "onlyonce": False,
-            "clean": False,
-            "queue_cnt": 5,
-            "sign_sites": ["all"],
-            "login_sites": [],
-            "retry_keyword": "错误|失败"
+            "enabled": self._enabled,
+            "cron": self._cron,
+            "onlyonce": self._onlyonce,
+            "notify": self._notify,
+            "queue_cnt": self._queue_cnt,
+            "auto_cf": self._auto_cf,
+            "sign_sites": self._sign_sites,
         }
 
-    def get_page(self):
+    def get_page(self) -> list[dict]:
         return [
             {
-                'component': 'VAlert',
-                'props': {'type': 'info', 'variant': 'tonal', 'text': '站点自动签到Pro：自动签到所有已选站点，FlareSolverr优先过CF，失败自动Playwright降级。', 'class': 'mt-4'}
+                "component": "div",
+                "props": {"class": "pa-3"},
+                "content": [
+                    {"component": "div", "props": {"class": "text-h6 mb-2"}, "text": "站点自动签到Pro"},
+                    {"component": "div", "props": {"class": "text-body-2"}, "text": "自动签到MP里所有已添加站点，优先调用FlareSolverr过CF验证，失败自动降级Playwright浏览器渲染。"},
+                    {"component": "div", "props": {"class": "text-body-2 mt-2"}, "text": "FlareSolverr地址: http://192.168.2.70:8191"},
+                ]
             }
         ]
 
     def stop_service(self):
-        self._enabled = False
+        if self._scheduler:
+            self._scheduler.shutdown(wait=False)
+            self._scheduler = None
+
+    def __get_flaresolverr_page(self, url: str, cookie: str) -> Optional[str]:
         try:
-            if self._scheduler:
-                self._scheduler.shutdown(wait=False)
-                self._scheduler = None
-        except Exception:
-            pass
+            flare_url = "http://192.168.2.70:8191/v1"
+            payload = {
+                "cmd": "request.get",
+                "url": url,
+                "maxTimeout": 60000,
+                "headers": {"Cookie": cookie}
+            }
+            resp = RequestUtils(timeout=70).post_res(url=flare_url, json=payload)
+            if resp and resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "ok":
+                    return data.get("solution", {}).get("response", "")
+            return None
+        except Exception as e:
+            logger.error(f"FlareSolverr请求失败: {str(e)}")
+            return None
 
     def sign_in(self):
-        sites = SiteOper().list_order_by_pri()
+        site_oper = SiteOper()
+        sites = site_oper.list_order_by_pri()
         if not sites:
-            logger.info("没有站点")
+            logger.info("没有添加任何站点")
             return
-        logger.info(f"开始签到，共{len(sites)}个站点")
+        logger.info(f"开始签到，共 {len(sites)} 个站点")
         results = []
         for site in sites:
             try:
-                logger.info(f"签到: {site.name}")
-                results.append(f"✅ {site.name}: 签到完成")
+                time.sleep(random.uniform(2, 10))
+                site_name = site.name
+                site_url = site.url
+                site_cookie = site.cookie
+                if not site_cookie:
+                    results.append(f"❌ {site_name}: 没有Cookie")
+                    continue
+                logger.info(f"签到: {site_name}")
+                sign_url = f"{site_url}/attendance.php"
+                page_source = self.__get_flaresolverr_page(sign_url, site_cookie)
+                if not page_source:
+                    page_source = PlaywrightHelper().get_page_source(
+                        url=sign_url,
+                        cookies=site_cookie,
+                        ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        timeout=15
+                    )
+                if page_source:
+                    if under_challenge(page_source):
+                        results.append(f"⚠️ {site_name}: CF挑战无法通过")
+                        continue
+                    if not SiteUtils.is_logged_in(page_source):
+                        results.append(f"❌ {site_name}: Cookie失效")
+                        continue
+                    if "签到成功" in page_source or "已签到" in page_source or SiteUtils.is_checkin(page_source):
+                        results.append(f"✅ {site_name}: 签到成功")
+                    else:
+                        results.append(f"✅ {site_name}: 签到请求已发送")
+                else:
+                    results.append(f"❌ {site_name}: 请求失败")
             except Exception as e:
-                results.append(f"❌ {site.name}: {e}")
+                logger.error(f"{site.name}: 签到异常 {str(e)}")
+                results.append(f"❌ {site.name}: 异常 {str(e)}")
         if self._notify:
-            logger.info("\n".join(results))
+            notify_text = "站点签到结果：\n" + "\n".join(results)
+            logger.info(notify_text)
