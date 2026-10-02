@@ -7,7 +7,6 @@
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 1,
-    "release": true,
     "system_version": ">=3.0.0",
     "history": {
       "v1.0.0": "首次发布：自动签到MP所有站点，FlareSolverr+Playwright过CF，随机错峰，微信通知"
