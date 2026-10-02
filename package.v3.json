@@ -1,15 +1,15 @@
 {
   "siteautosignin": {
     "name": "站点自动签到Pro",
-    "description": "自动签到MP里所有站点，FlareSolverr+Playwright过CF，界面完全对齐官方AutoSignIn。",
+    "description": "自动签到MP里所有站点，FlareSolverr+Playwright过CF，界面对齐官方AutoSignIn。",
     "labels": "工具,签到",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
-      "v1.1.0": "修复目录结构，界面完全对齐官方AutoSignIn"
+      "v1.2.0": "修复PluginIdentity不一致错误"
     }
   }
 }
