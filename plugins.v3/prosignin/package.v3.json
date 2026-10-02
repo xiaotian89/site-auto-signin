@@ -9,7 +9,7 @@
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
-      "v2.0.0": "全新插件ID，彻底解决安装冲突"
+      "v2.0.0": "全新插件ID，彻底解决安装冲突，界面对齐官方AutoSignIn，FlareSolverr+Playwright过CF"
     }
   }
 }
