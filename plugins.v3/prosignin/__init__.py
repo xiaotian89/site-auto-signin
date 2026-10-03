@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.1.1"
+    plugin_version = "3.1.2"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -436,6 +436,131 @@ class ProSignin(_PluginBase):
                 return f"❌ {site.name}: 异常 {str(e)[:50]}"
 
         return f"❌ {site.name}: 重试次数耗尽"
+
+
+    def __handle_site_slider(self, page, site_name):
+        """处理站点自有滑块验证码，自动拖动滑块按钮"""
+        import time as _t
+        import random as _r
+        
+        # 52pt 等站点的滑块选择器（优先匹配）
+        slider_selectors = [
+            '#slider-btn',           # 52pt 专门滑块
+            '#slider',                # 通用滑块按钮
+            '.slider-btn',            # 通用 class
+            '.slide-btn',
+            '.drag-btn',
+            '.captcha-btn',
+            '.verify-btn',
+            '.nc_iconfont.btn_slide', # 网易易盾
+            '.geetest_slider_button',  # 极验
+            '[class*="slider"]',
+            '[class*="slide"]',
+            '[class*="drag"]',
+        ]
+        
+        slider_btn = None
+        used_selector = None
+        
+        for selector in slider_selectors:
+            try:
+                elements = page.query_selector_all(selector)
+                if elements:
+                    # 选择可见且可交互的元素
+                    for el in elements:
+                        if el.is_visible() and el.is_enabled():
+                            slider_btn = el
+                            used_selector = selector
+                            break
+                    if slider_btn:
+                        break
+            except Exception:
+                continue
+        
+        if not slider_btn:
+            _log_warn(f"{site_name}: 未找到滑块按钮元素")
+            return False
+        
+        _log(f"{site_name}: 找到滑块按钮，选择器: {used_selector}")
+        
+        try:
+            # 获取滑块按钮和容器的位置
+            btn_box = slider_btn.bounding_box()
+            if not btn_box:
+                _log_warn(f"{site_name}: 无法获取滑块按钮位置")
+                return False
+            
+            # 尝试获取滑块容器宽度
+            container_width = btn_box['width'] * 5  # 默认估算
+            for container_sel in ['#slider-container', '.slider-container', '[class*="slider-container"]']:
+                container = page.query_selector(container_sel)
+                if container:
+                    c_box = container.bounding_box()
+                    if c_box:
+                        container_width = c_box['width']
+                        break
+            
+            # 计算目标位置（拖到容器右边，留一点边距）
+            start_x = btn_box['x'] + btn_box['width'] / 2
+            start_y = btn_box['y'] + btn_box['height'] / 2
+            target_x = btn_box['x'] + container_width - btn_box['width'] - 5
+            target_y = start_y + _r.uniform(-2, 2)  # 轻微Y轴抖动
+            
+            _log(f"{site_name}: 滑块拖动: ({start_x:.0f},{start_y:.0f}) -> ({target_x:.0f},{target_y:.0f})")
+            
+            # 模拟人类拖动行为
+            mouse = page.mouse
+            
+            # 1. 移动到滑块按钮上方
+            mouse.move(start_x, start_y)
+            _t.sleep(_r.uniform(0.1, 0.3))
+            
+            # 2. 按下鼠标
+            mouse.down()
+            _t.sleep(_r.uniform(0.1, 0.2))
+            
+            # 3. 分段拖动（带随机轨迹和停顿，模拟人类）
+            steps = _r.randint(15, 25)
+            for i in range(1, steps + 1):
+                progress = i / steps
+                # 非线性进度（先快后慢，模拟人类）
+                eased_progress = 1 - (1 - progress) ** 2
+                current_x = start_x + (target_x - start_x) * eased_progress
+                current_y = start_y + _r.uniform(-3, 3)  # Y轴随机抖动
+                mouse.move(current_x, current_y)
+                # 随机停顿（越接近终点停顿越长）
+                if i > steps * 0.7:
+                    _t.sleep(_r.uniform(0.02, 0.08))
+                else:
+                    _t.sleep(_r.uniform(0.01, 0.03))
+            
+            # 4. 确保到达终点
+            mouse.move(target_x, target_y)
+            _t.sleep(_r.uniform(0.1, 0.3))
+            
+            # 5. 释放鼠标
+            mouse.up()
+            _t.sleep(_r.uniform(0.3, 0.6))
+            
+            _log(f"{site_name}: 滑块拖动完成")
+            
+            # 6. 52pt 专门处理：拖动后点击提交签到按钮
+            if '52pt' in site_name.lower() or '52pt' in page.url:
+                _t.sleep(0.5)
+                submit_btn = page.query_selector('#submit-btn')
+                if submit_btn and submit_btn.is_enabled():
+                    _log(f"{site_name}: 点击提交签到按钮")
+                    submit_btn.click()
+                    _t.sleep(1)
+                else:
+                    _log_warn(f"{site_name}: 提交按钮未启用，可能滑块验证未通过")
+            
+            return True
+            
+        except Exception as e:
+            _log_warn(f"{site_name}: 滑块拖动异常: {e}")
+            return False
+
 
     def __clean_cache(self):
         """清理本插件本日缓存：仅清理prosignin自己的临时文件，不碰MP全局或其他插件"""
