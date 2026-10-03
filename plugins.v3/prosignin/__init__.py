@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.4"
+    plugin_version = "3.2.5"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -337,7 +337,21 @@ class ProSignin(_PluginBase):
                     return f"❌ {site_name}: 无Cookie"
 
                 # 52pt 等站点用自定义签到URL
+                # API签到站点特殊处理（馒头、肉丝、朱雀）
                 site_url_lower = site_url.lower()
+                if "m-team" in site_url_lower or "mteam" in site_url_lower:
+                    api_result = self.__signin_mteam(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                elif "rousi" in site_url_lower:
+                    api_result = self.__signin_rousi(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                elif "zhuque" in site_url_lower:
+                    api_result = self.__signin_zhuque(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                
                 if '52pt' in site_url_lower or '52pt' in site_name.lower():
                     sign_url = f"{site_url.rstrip('/')}/52bakatestdate0823.php"
                 else:
@@ -472,6 +486,166 @@ class ProSignin(_PluginBase):
 
         return f"❌ {site.name}: 重试次数耗尽"
 
+
+    def __signin_mteam(self, site, site_name, site_url):
+        """馒头(m-team) API签到：更新最后访问时间保号，实际没有签到按钮"""
+        try:
+            token = getattr(site, "token", "") or getattr(site, "apikey", "") or ""
+            ua = getattr(site, "ua", "") or "Mozilla/5.0"
+            timeout = getattr(site, "timeout", 30) or 30
+            proxy = getattr(site, "proxy", None)
+            
+            from urllib.parse import urlparse
+            domain = urlparse(site_url).netloc
+            if domain.startswith("www."):
+                domain = domain[4:]
+            
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": ua,
+                "Accept": "application/json, text/plain, */*",
+                "Authorization": str(token).strip()
+            }
+            proxies = None
+            if proxy:
+                from app.core.config import settings
+                proxies = settings.PROXY
+            
+            res = RequestUtils(headers=headers, timeout=timeout, proxies=proxies,
+                               referer=f"{site_url}index").post_res(
+                url=f"https://api.{domain}/api/member/updateLastBrowse")
+            
+            if res and res.status_code == 200:
+                try:
+                    payload = res.json()
+                    if isinstance(payload, dict) and str(payload.get("code")) == "0":
+                        return f"✅ {site_name}: 保号成功(更新访问时间)"
+                except Exception:
+                    pass
+                return f"✅ {site_name}: 保号成功"
+            elif res:
+                return f"❌ {site_name}: 保号失败(状态码:{res.status_code})"
+            else:
+                return f"❌ {site_name}: 保号失败(无法连接)"
+        except Exception as e:
+            return f"❌ {site_name}: 保号异常: {str(e)[:50]}"
+
+    def __signin_rousi(self, site, site_name, site_url):
+        """肉丝(rousi.pro) API Key签到"""
+        try:
+            apikey = str(getattr(site, "apikey", "") or "").strip()
+            token = str(getattr(site, "token", "") or "").strip()
+            ua = getattr(site, "ua", "") or "Mozilla/5.0"
+            timeout = getattr(site, "timeout", 30) or 30
+            proxy = getattr(site, "proxy", None)
+            
+            auth_value = apikey or token
+            if not auth_value:
+                return f"❌ {site_name}: 缺少API Key"
+            
+            if not auth_value.lower().startswith("bearer "):
+                auth_value = f"Bearer {auth_value}"
+            
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": ua,
+                "Authorization": auth_value
+            }
+            proxies = None
+            if proxy:
+                from app.core.config import settings
+                proxies = settings.PROXY
+            
+            # 肉丝签到API
+            res = RequestUtils(headers=headers, timeout=timeout, proxies=proxies).post_res(
+                url=f"{site_url.rstrip('/')}/api/attendance/claim")
+            
+            if res and res.status_code == 200:
+                try:
+                    payload = res.json() or {}
+                    code = payload.get("code")
+                    if code == 0 or code == "0":
+                        return f"✅ {site_name}: 签到成功"
+                except Exception:
+                    pass
+                return f"✅ {site_name}: 签到成功"
+            elif res and res.status_code == 400:
+                try:
+                    payload = res.json() or {}
+                    code = payload.get("code")
+                    msg = payload.get("message") or payload.get("msg") or ""
+                    if code == 1 and ("已签到" in msg or "重复" in msg or "already" in msg.lower()):
+                        return f"✅ {site_name}: 已签到"
+                except Exception:
+                    pass
+                return f"❌ {site_name}: 签到失败(状态码:400)"
+            elif res:
+                return f"❌ {site_name}: 签到失败(状态码:{res.status_code})"
+            else:
+                return f"❌ {site_name}: 签到失败(无法连接)"
+        except Exception as e:
+            return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
+
+    def __signin_zhuque(self, site, site_name, site_url):
+        """朱雀(zhuque.in) 释放技能游戏化签到"""
+        try:
+            site_cookie = getattr(site, "cookie", "") or ""
+            ua = getattr(site, "ua", "") or "Mozilla/5.0"
+            timeout = getattr(site, "timeout", 30) or 30
+            proxy = getattr(site, "proxy", None)
+            
+            proxies = None
+            if proxy:
+                from app.core.config import settings
+                proxies = settings.PROXY
+            
+            # 1. 获取页面，提取 x-csrf-token
+            page_res = RequestUtils(cookies=site_cookie, ua=ua, timeout=timeout, 
+                                    proxies=proxies).get_res(url="https://zhuque.in")
+            if not page_res or page_res.status_code != 200:
+                return f"❌ {site_name}: 无法连接"
+            
+            html_text = page_res.text
+            if "login.php" in html_text:
+                return f"❌ {site_name}: Cookie失效"
+            
+            # 提取 x-csrf-token
+            import re
+            csrf_match = re.search(r'name="x-csrf-token"\s+content="([^"]+)"', html_text)
+            if not csrf_match:
+                csrf_match = re.search(r'<meta[^>]+x-csrf-token[^>]+content="([^"]+)"', html_text)
+            if not csrf_match:
+                return f"❌ {site_name}: 未找到csrf-token"
+            
+            csrf_token = csrf_match.group(1)
+            
+            # 2. 释放技能
+            headers = {
+                "x-csrf-token": str(csrf_token),
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": ua
+            }
+            data = {"all": 1, "resetModal": "true"}
+            
+            skill_res = RequestUtils(cookies=site_cookie, headers=headers, timeout=timeout,
+                                     proxies=proxies).post_res(
+                url="https://zhuque.in/api/gaming/fireGenshinCharacterMagic", json=data)
+            
+            if skill_res and skill_res.status_code == 200:
+                try:
+                    skill_dict = skill_res.json()
+                    if skill_dict.get('status') == 200:
+                        bonus = skill_dict.get('data', {}).get('bonus', 0)
+                        return f"✅ {site_name}: 释放技能成功(+{bonus}魔力)"
+                except Exception:
+                    pass
+                return f"✅ {site_name}: 释放技能成功"
+            elif skill_res:
+                return f"❌ {site_name}: 释放技能失败(状态码:{skill_res.status_code})"
+            else:
+                return f"❌ {site_name}: 释放技能失败(无法连接)"
+        except Exception as e:
+            return f"❌ {site_name}: 释放技能异常: {str(e)[:50]}"
 
     @staticmethod
     def __is_cf_page(page_source):

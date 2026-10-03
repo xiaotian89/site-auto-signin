@@ -3,7 +3,7 @@
     "name": "站点自动签到Pro",
     "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
     "labels": "工具,签到",
-    "version": "3.2.4",
+    "version": "3.2.5",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
@@ -34,7 +34,8 @@
       "v3.2.1": "滑块处理改用MP内置PlaywrightHelper.action()，无需用户手动安装浏览器，CloakBrowser反检测更好",
       "v3.2.2": "添加通用签到URL fallback机制-attendance.php失败自动尝试signin/sign/checkin等7种常见URL+详细状态码日志",
       "v3.2.3": "修复CF五秒盾被误判为站点自有滑块-增加全面CF检测+滑块检测前先排除CF页面+优化滑块关键词",
-      "v3.2.4": "区分签到成功和已签到两种状态-已签到过显示已签到不显示签到成功"
+      "v3.2.4": "区分签到成功和已签到两种状态-已签到过显示已签到不显示签到成功",
+      "v3.2.5": "增加馒头(m-team)API保号+肉丝(rousi.pro)API Key签到+朱雀(zhuque.in)释放技能签到"
     }
   }
 }
