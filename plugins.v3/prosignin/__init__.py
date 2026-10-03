@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.7"
+    plugin_version = "3.3.8"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -572,24 +572,34 @@ class ProSignin(_PluginBase):
                 "Accept": "application/json, text/plain, */*",
                 "Authorization": str(token).strip()
             }
-            proxies = None
-            if proxy:
-                from app.core.config import settings
-                proxies = settings.PROXY
+            # 始终使用代理（从环境变量或settings获取）
+            from app.core.config import settings
+            proxies = settings.PROXY if hasattr(settings, 'PROXY') and settings.PROXY else None
+            if not proxies:
+                import os as _os
+                http_proxy = _os.environ.get('HTTPS_PROXY') or _os.environ.get('https_proxy') or _os.environ.get('HTTP_PROXY') or _os.environ.get('http_proxy')
+                if http_proxy:
+                    proxies = {'http': http_proxy, 'https': http_proxy}
+            _log(f"{site_name}: 使用代理: {proxies is not None}")
             
             res = RequestUtils(headers=headers, timeout=timeout, proxies=proxies,
-                               referer=f"{site_url}index").post_res(
+                               referer=f"{site_url}index", allow_redirects=True).post_res(
                 url=f"https://api.{domain}/api/member/updateLastBrowse")
             
-            if res and res.status_code == 200:
+            if res and res.status_code in (200, 301, 302):
+                _log(f"{site_name}: API响应状态码={res.status_code}")
                 try:
                     payload = res.json()
                     if isinstance(payload, dict) and str(payload.get("code")) == "0":
                         return f"✅ {site_name}: 保号成功(更新访问时间)"
                 except Exception:
                     pass
+                # 302重定向也认为成功（API可能返回重定向表示成功）
+                if res.status_code in (301, 302):
+                    return f"✅ {site_name}: 保号成功(重定向)"
                 return f"✅ {site_name}: 保号成功"
             elif res:
+                _log_warn(f"{site_name}: API响应状态码={res.status_code}, 响应内容={(res.text or '')[:200]}")
                 return f"❌ {site_name}: 保号失败(状态码:{res.status_code})"
             else:
                 return f"❌ {site_name}: 保号失败(无法连接)"
@@ -614,10 +624,15 @@ class ProSignin(_PluginBase):
                 "Accept": "application/json, text/plain, */*"
             }
             body = {"mode": "fixed"}
-            proxies = None
-            if proxy:
-                from app.core.config import settings
-                proxies = settings.PROXY
+            # 始终使用代理
+            from app.core.config import settings
+            proxies = settings.PROXY if hasattr(settings, 'PROXY') and settings.PROXY else None
+            if not proxies:
+                import os as _os
+                http_proxy = _os.environ.get('HTTPS_PROXY') or _os.environ.get('https_proxy') or _os.environ.get('HTTP_PROXY') or _os.environ.get('http_proxy')
+                if http_proxy:
+                    proxies = {'http': http_proxy, 'https': http_proxy}
+            _log(f"{site_name}: 使用代理: {proxies is not None}")
             
             api_url = f"{site_url.rstrip('/')}/api/points/attendance"
             res = None
@@ -681,6 +696,7 @@ class ProSignin(_PluginBase):
             elif res and res.status_code in (401, 403):
                 return f"❌ {site_name}: API Key已失效或权限不足"
             elif res:
+                _log_warn(f"{site_name}: API响应状态码={res.status_code}, 响应内容={(res.text or '')[:200]}")
                 return f"❌ {site_name}: 签到失败(状态码:{res.status_code})"
             else:
                 return f"❌ {site_name}: 签到失败(无法连接)"
