@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.3"
+    plugin_version = "3.2.4"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -448,7 +448,9 @@ class ProSignin(_PluginBase):
                     result = f"⚠️ {site_name}: CF挑战"
                 elif not SiteUtils.is_logged_in(page_source):
                     result = f"❌ {site_name}: Cookie失效"
-                elif "签到成功" in page_source or "已签到" in page_source or "签到完成" in page_source or "魔力值" in page_source or SiteUtils.is_checkin(page_source):
+                elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source:
+                    result = f"✅ {site_name}: 已签到"
+                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or "魔力值" in page_source or SiteUtils.is_checkin(page_source):
                     result = f"✅ {site_name}: 签到成功"
                 elif "请先完成滑块" in page_source or "拖动滑块" in page_source:
                     result = f"❌ {site_name}: 滑块验证未通过"
