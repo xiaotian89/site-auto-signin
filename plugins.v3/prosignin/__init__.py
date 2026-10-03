@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.2"
+    plugin_version = "3.3.3"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -354,6 +354,8 @@ class ProSignin(_PluginBase):
                 # 52pt 等站点用自定义签到URL
                 if '52pt' in site_url_lower or '52pt' in site_name.lower():
                     sign_url = f"{site_url.rstrip('/')}/52bakatestdate0823.php"
+                elif 'pttime' in site_url_lower or 'pt时间' in site_name.lower() or 'PT时间' in site_name:
+                    sign_url = f"{site_url.rstrip('/')}/attendance.php?type=list"
                 else:
                     sign_url = f"{site_url.rstrip('/')}/attendance.php"
                 page_source = None
@@ -548,7 +550,7 @@ class ProSignin(_PluginBase):
             return f"❌ {site_name}: 保号异常: {str(e)[:50]}"
 
     def __signin_rousi(self, site, site_name, site_url):
-        """肉丝(rousi.pro) API Key签到"""
+        """肉丝(rousi.pro) PeerGo系统 API Key签到，参考MP内置实现"""
         try:
             apikey = str(getattr(site, "apikey", "") or "").strip()
             token = str(getattr(site, "token", "") or "").strip()
@@ -556,32 +558,65 @@ class ProSignin(_PluginBase):
             timeout = getattr(site, "timeout", 30) or 30
             proxy = getattr(site, "proxy", None)
             
-            auth_value = apikey or token
-            if not auth_value:
+            if not apikey and not token:
                 return f"❌ {site_name}: 缺少API Key"
             
-            if not auth_value.lower().startswith("bearer "):
-                auth_value = f"Bearer {auth_value}"
-            
-            headers = {
+            base_headers = {
                 "Content-Type": "application/json",
                 "User-Agent": ua,
-                "Authorization": auth_value
+                "Accept": "application/json, text/plain, */*"
             }
+            body = {"mode": "fixed"}
             proxies = None
             if proxy:
                 from app.core.config import settings
                 proxies = settings.PROXY
             
-            # 肉丝签到API
-            res = RequestUtils(headers=headers, timeout=timeout, proxies=proxies).post_res(
-                url=f"{site_url.rstrip('/')}/api/attendance/claim")
+            api_url = f"{site_url.rstrip('/')}/api/points/attendance"
+            res = None
             
+            # 优先用 api-token header（个人API Key）
+            if apikey:
+                res = RequestUtils(
+                    headers={**base_headers, "api-token": apikey},
+                    timeout=timeout, proxies=proxies
+                ).post_res(url=api_url, json=body)
+                
+                # 检查是否成功
+                if res and res.status_code == 200:
+                    try:
+                        payload = res.json() or {}
+                        if payload.get("code") == 0:
+                            return f"✅ {site_name}: 签到成功"
+                    except Exception:
+                        pass
+                # 检查是否已签到
+                if res and res.status_code == 400:
+                    try:
+                        payload = res.json() or {}
+                        code = payload.get("code")
+                        msg = payload.get("message") or payload.get("msg") or ""
+                        if code == 1 and ("已签到" in msg or "重复" in msg or "already" in str(msg).lower()):
+                            return f"✅ {site_name}: 已签到"
+                    except Exception:
+                        pass
+                # api-token失败，回退Authorization
+                if token:
+                    res = None
+            
+            # 回退用 Authorization: Bearer
+            if token and res is None:
+                auth_value = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+                res = RequestUtils(
+                    headers={**base_headers, "Authorization": auth_value},
+                    timeout=timeout, proxies=proxies
+                ).post_res(url=api_url, json=body)
+            
+            # 最终判定
             if res and res.status_code == 200:
                 try:
                     payload = res.json() or {}
-                    code = payload.get("code")
-                    if code == 0 or code == "0":
+                    if payload.get("code") == 0:
                         return f"✅ {site_name}: 签到成功"
                 except Exception:
                     pass
@@ -591,11 +626,13 @@ class ProSignin(_PluginBase):
                     payload = res.json() or {}
                     code = payload.get("code")
                     msg = payload.get("message") or payload.get("msg") or ""
-                    if code == 1 and ("已签到" in msg or "重复" in msg or "already" in msg.lower()):
+                    if code == 1 and ("已签到" in msg or "重复" in msg or "already" in str(msg).lower()):
                         return f"✅ {site_name}: 已签到"
                 except Exception:
                     pass
                 return f"❌ {site_name}: 签到失败(状态码:400)"
+            elif res and res.status_code in (401, 403):
+                return f"❌ {site_name}: API Key已失效或权限不足"
             elif res:
                 return f"❌ {site_name}: 签到失败(状态码:{res.status_code})"
             else:

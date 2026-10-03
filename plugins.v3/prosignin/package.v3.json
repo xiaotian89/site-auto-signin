@@ -3,7 +3,7 @@
     "name": "站点自动签到Pro",
     "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
     "labels": "工具,签到",
-    "version": "3.3.2",
+    "version": "3.3.3",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
@@ -42,7 +42,8 @@
       "v3.2.9": "增加繁体字签到成功关键词-簽到成功/簽到完成/已簽到/签到已得等",
       "v3.3.0": "增加雷池安全验证检测-检测到雷池页面提示开启浏览器仿真+增加重试关键词",
       "v3.3.1": "修复馒头等API密钥站点被cookie检查拦截-API判断移到cookie检查之前",
-      "v3.3.2": "修复朱雀签到缺少cookie检查-朱雀是用cookie的释放技能签到不是密钥"
+      "v3.3.2": "修复朱雀签到缺少cookie检查-朱雀是用cookie的释放技能签到不是密钥",
+      "v3.3.3": "修复肉丝API地址(/api/points/attendance)+PT时间签到URL(attendance.php?type=list)"
     }
   }
 }
