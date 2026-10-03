@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.9"
+    plugin_version = "3.3.0"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -465,7 +465,10 @@ class ProSignin(_PluginBase):
                     _log_warn(f"{site_name}: 请求失败，page_source为空，URL: {sign_url}")
                     result = f"❌ {site_name}: 请求失败"
                 elif under_challenge(page_source):
-                    result = f"⚠️ {site_name}: CF挑战"
+                    result = f"⚠️ {site_name}: CF挑战(请开启浏览器仿真)"
+                elif "雷池" in page_source or "安全验证" in page_source or "正在验证" in page_source or "请稍候" in page_source:
+                    # 雷池安全验证页面，需要浏览器渲染等待
+                    result = f"⚠️ {site_name}: 雷池验证(请在站点管理开启浏览器仿真)"
                 elif not SiteUtils.is_logged_in(page_source):
                     result = f"❌ {site_name}: Cookie失效"
                 elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source or "已簽到" in page_source or "今日已簽到" in page_source or "已經簽到" in page_source or "請勿重複簽到" in page_source:
