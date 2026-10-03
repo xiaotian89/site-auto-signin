@@ -30,7 +30,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "自动签到所有已选站点，并发队列+失败重试+智能降级(普通请求→FlareSolverr→Playwright)，支持清理缓存。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "2.0.6"
+    plugin_version = "2.0.7"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -271,15 +271,14 @@ class ProSignin(_PluginBase):
         return f"❌ {site.name}: 重试次数耗尽"
 
     def __clean_cache(self):
-        """清理本日缓存：清理requests缓存和临时文件"""
+        """清理本插件本日缓存：仅清理prosignin自己的临时文件，不碰MP全局或其他插件"""
         cleaned = []
         try:
-            # 清理 requests 缓存目录
             import glob
+            # 只清理本插件前缀的临时文件，绝对安全
             cache_patterns = [
-                "/tmp/requests_cache_*",
-                "/tmp/cache_*",
                 "/tmp/prosignin_*",
+                "/tmp/pro_signin_*",
             ]
             for pattern in cache_patterns:
                 for f in glob.glob(pattern):
@@ -289,7 +288,7 @@ class ProSignin(_PluginBase):
                             cleaned.append(f)
                     except Exception:
                         pass
-            logger.info(f"清理缓存完成，清理{len(cleaned)}个文件")
+            logger.info(f"清理本插件缓存完成，清理{len(cleaned)}个文件")
         except Exception as e:
             logger.warning(f"清理缓存失败: {e}")
         return cleaned

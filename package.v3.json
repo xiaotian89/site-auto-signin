@@ -3,7 +3,7 @@
     "name": "站点自动签到Pro",
     "description": "自动签到MP里所有已添加站点，FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。",
     "labels": "工具,签到",
-    "version": "2.0.6",
+    "version": "2.0.7",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
@@ -15,7 +15,8 @@
       "v2.0.3": "统一PluginId为驼峰ProSignin（目录名+索引key+插件内key一致），修复配置页面404",
       "v2.0.4": "最终修复：目录名小写prosignin（MP通过GitHub API查找时强制转小写），索引key和类名保持驼峰ProSignin",
       "v2.0.5": "智能降级：先普通请求，检测到CF挑战自动走FlareSolverr，失败降级Playwright，无CF站点直接秒过",
-      "v2.0.6": "补全功能：并发队列签到、失败关键词自动重试、清理本日缓存开关真正生效"
+      "v2.0.6": "补全功能：并发队列签到、失败关键词自动重试、清理本日缓存开关真正生效",
+      "v2.0.7": "安全修复：缓存清理范围缩小到仅本插件临时文件，不碰MP全局或其他插件缓存"
     }
   }
 }
