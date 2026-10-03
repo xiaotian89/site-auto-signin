@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.0"
+    plugin_version = "3.3.1"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -332,11 +332,6 @@ class ProSignin(_PluginBase):
 
                 site_name = site.name
                 site_url = site.url
-                site_cookie = site.cookie
-                if not site_cookie:
-                    return f"❌ {site_name}: 无Cookie"
-
-                # 52pt 等站点用自定义签到URL
                 # API签到站点特殊处理（馒头、肉丝、朱雀）
                 site_url_lower = site_url.lower()
                 if "m-team" in site_url_lower or "mteam" in site_url_lower:
@@ -352,6 +347,11 @@ class ProSignin(_PluginBase):
                     _log(api_result)
                     return api_result
                 
+                site_cookie = site.cookie
+                if not site_cookie:
+                    return f"❌ {site_name}: 无Cookie"
+
+                # 52pt 等站点用自定义签到URL
                 if '52pt' in site_url_lower or '52pt' in site_name.lower():
                     sign_url = f"{site_url.rstrip('/')}/52bakatestdate0823.php"
                 else:
