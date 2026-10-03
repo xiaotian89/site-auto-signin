@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.1"
+    plugin_version = "3.3.2"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -604,9 +604,11 @@ class ProSignin(_PluginBase):
             return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
 
     def __signin_zhuque(self, site, site_name, site_url):
-        """朱雀(zhuque.in) 释放技能游戏化签到"""
+        """朱雀(zhuque.in) 释放技能游戏化签到（需要cookie）"""
         try:
             site_cookie = getattr(site, "cookie", "") or ""
+            if not site_cookie:
+                return f"❌ {site_name}: 无Cookie"
             ua = getattr(site, "ua", "") or "Mozilla/5.0"
             timeout = getattr(site, "timeout", 30) or 30
             proxy = getattr(site, "proxy", None)
