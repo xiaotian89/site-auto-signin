@@ -42,7 +42,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.0.5"
+    plugin_version = "3.0.6"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -456,24 +456,34 @@ class ProSignin(_PluginBase):
         if "history" not in history:
             history["history"] = {}
         history["history"][today] = {}
+        recorded = 0
         for result in results:
-            # 解析结果格式: ✅ 站点名: 原因 或 ❌ 站点名: 原因
-            if ":" in result:
-                status_icon = result[0]
-                rest = result[1:].strip()
-                if ":" in rest:
-                    site_name, message = rest.split(":", 1)
-                    site_name = site_name.strip()
-                    message = message.strip()
-                else:
-                    site_name = rest
-                    message = ""
-                status = "success" if status_icon == "✅" else ("warning" if status_icon == "⚠️" else "failed")
-                history["history"][today][site_name] = {
-                    "status": status,
-                    "message": message
-                }
+            # 解析结果格式: ✅ 站点名: 原因 或 ❌ 站点名: 原因（支持中英文冒号）
+            if not result or len(result) < 2:
+                continue
+            status_icon = result[0]
+            rest = result[1:].strip()
+            # 同时支持英文冒号:和中文冒号：
+            if "：" in rest:
+                site_name, message = rest.split("：", 1)
+            elif ":" in rest:
+                site_name, message = rest.split(":", 1)
+            else:
+                site_name = rest
+                message = ""
+            site_name = site_name.strip()
+            message = message.strip()
+            if not site_name:
+                continue
+            status = "success" if status_icon == "✅" else ("warning" if status_icon == "⚠️" else "failed")
+            history["history"][today][site_name] = {
+                "status": status,
+                "message": message
+            }
+            recorded += 1
+        _log(f"记录历史：今天共{recorded}个站点结果")
         self.__save_history(history)
+        _log(f"历史记录已保存到 {self._history_file}")
 
     def stop_service(self):
         self._enabled = False
