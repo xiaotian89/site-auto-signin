@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.6"
+    plugin_version = "3.2.7"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -464,7 +464,7 @@ class ProSignin(_PluginBase):
                     result = f"❌ {site_name}: Cookie失效"
                 elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source:
                     result = f"✅ {site_name}: 已签到"
-                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or SiteUtils.is_checkin(page_source):
+                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or "签到奖励" in page_source or "获得魔力" in page_source or "魔力+" in page_source or "打卡成功" in page_source or "今日签到" in page_source or "签到已完成" in page_source or SiteUtils.is_checkin(page_source):
                     result = f"✅ {site_name}: 签到成功"
                 elif "魔力值" in page_source:
                     # "魔力值"太宽泛，很多页面本身就有魔力值显示，不能单独作为成功依据
@@ -473,10 +473,11 @@ class ProSignin(_PluginBase):
                         result = f"✅ {site_name}: 签到成功"
                     else:
                         result = f"⚠️ {site_name}: 状态未知(页面含魔力值但无签到提示)"
-                elif "请先完成滑块" in page_source or "拖动滑块" in page_source:
-                    result = f"❌ {site_name}: 滑块验证未通过"
+                elif "请先完成滑块" in page_source or "拖动滑块" in page_source or "滑块验证" in page_source or "验证码错误" in page_source or "验证失败" in page_source or "签到失败" in page_source or "操作失败" in page_source:
+                    result = f"❌ {site_name}: 签到失败"
                 else:
-                    result = f"✅ {site_name}: 请求已发送"
+                    # 兜底：请求已发送但未匹配到明确成功/失败关键词，结果未知
+                    result = f"⚠️ {site_name}: 请求已发送(结果未知，请手动确认)"
 
                 # 重试判断：如果结果包含重试关键词，且不是最后一次尝试
                 if attempt < max_retries and retry_keywords:
