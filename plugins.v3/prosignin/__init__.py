@@ -19,6 +19,7 @@ from app.plugins import _PluginBase
 from app.schemas.types import EventType, NotificationType
 from app.utils.http import RequestUtils
 from app.utils.site import SiteUtils
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -27,9 +28,9 @@ class ProSignin(_PluginBase):
     """站点自动签到Pro。"""
 
     plugin_name = "站点自动签到Pro"
-    plugin_desc = "自动签到MP里所有已添加站点，智能降级：先普通请求，检测CF挑战自动走FlareSolverr，失败降级Playwright。"
+    plugin_desc = "自动签到所有已选站点，并发队列+失败重试+智能降级(普通请求→FlareSolverr→Playwright)，支持清理缓存。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "2.0.5"
+    plugin_version = "2.0.6"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -177,55 +178,31 @@ class ProSignin(_PluginBase):
         return [
             {
                 'component': 'VAlert',
-                'props': {'type': 'info', 'variant': 'tonal', 'text': '站点自动签到Pro v2.0.5：智能降级，先普通请求，检测到CF挑战自动走FlareSolverr，失败降级Playwright。', 'class': 'mt-4'}
+                'props': {'type': 'info', 'variant': 'tonal', 'text': '站点自动签到Pro v2.0.6：并发队列签到，失败自动重试，智能降级(普通请求→FlareSolverr→Playwright)，支持清理本日缓存。', 'class': 'mt-4'}
             }
         ]
 
-    def stop_service(self):
-        self._enabled = False
-        try:
-            if self._scheduler:
-                self._scheduler.shutdown(wait=False)
-                self._scheduler = None
-        except Exception:
-            pass
+    def __sign_one_site(self, site):
+        """签到单个站点，支持智能降级和重试"""
+        import time as _time
+        max_retries = 2
+        retry_keywords = [kw.strip() for kw in (self._retry_keyword or "").split("|") if kw.strip()]
 
-    @eventmanager.register(EventType.PluginAction)
-    def _on_plugin_action(self, event: Event):
-        event_data = getattr(event, "event_data", None) or {}
-        if event_data.get("action") != "pro_signin":
-            return
-        self.sign_in()
-
-    def sign_in(self):
-        sites = SiteOper().list_order_by_pri()
-        if not sites:
-            logger.info("没有站点")
-            return
-
-        selected_ids = set(self._sign_sites or [])
-        if not selected_ids or "all" in selected_ids:
-            sign_sites = sites
-        else:
-            sign_sites = [s for s in sites if s.id in selected_ids]
-
-        logger.info(f"开始签到，共{len(sign_sites)}个站点")
-        results = []
-        for site in sign_sites:
+        for attempt in range(max_retries + 1):
             try:
-                import time as _time
-                _time.sleep(2)
+                if attempt > 0:
+                    logger.info(f"{site.name}: 第{attempt}次重试")
+                    _time.sleep(3)
+
                 site_name = site.name
                 site_url = site.url
                 site_cookie = site.cookie
                 if not site_cookie:
-                    results.append(f"❌ {site_name}: 无Cookie")
-                    continue
-                logger.info(f"签到: {site_name}")
+                    return f"❌ {site_name}: 无Cookie"
+
                 sign_url = f"{site_url.rstrip('/')}/attendance.php"
                 page_source = None
 
-                # 智能降级：先普通请求，检测到CF挑战再走FlareSolverr，最后Playwright
                 # 第1步：普通请求（最快）
                 try:
                     resp = RequestUtils(cookies=site_cookie, timeout=30).get_res(url=sign_url)
@@ -234,7 +211,7 @@ class ProSignin(_PluginBase):
                 except Exception as e:
                     logger.warning(f"普通请求失败: {e}")
 
-                # 第2步：检测是否CF挑战，是则降级FlareSolverr
+                # 第2步：检测CF挑战，降级FlareSolverr
                 if page_source and under_challenge(page_source) and self._auto_cf >= 1:
                     logger.info(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
                     page_source = None
@@ -253,7 +230,7 @@ class ProSignin(_PluginBase):
                     except Exception as e:
                         logger.warning(f"FlareSolverr失败: {e}")
 
-                # 第3步：FlareSolverr仍失败或仍有CF挑战，降级Playwright
+                # 第3步：仍有CF挑战，降级Playwright
                 if page_source and under_challenge(page_source) and self._auto_cf >= 2:
                     logger.info(f"{site_name}: FlareSolverr未过CF，降级Playwright")
                     page_source = None
@@ -268,23 +245,107 @@ class ProSignin(_PluginBase):
                         logger.warning(f"Playwright失败: {e}")
 
                 if not page_source:
-                    results.append(f"❌ {site_name}: 请求失败")
-                    continue
-
-                if under_challenge(page_source):
-                    results.append(f"⚠️ {site_name}: CF挑战")
-                    continue
-                if not SiteUtils.is_logged_in(page_source):
-                    results.append(f"❌ {site_name}: Cookie失效")
-                    continue
-                if "签到成功" in page_source or "已签到" in page_source or SiteUtils.is_checkin(page_source):
-                    results.append(f"✅ {site_name}: 签到成功")
+                    result = f"❌ {site_name}: 请求失败"
+                elif under_challenge(page_source):
+                    result = f"⚠️ {site_name}: CF挑战"
+                elif not SiteUtils.is_logged_in(page_source):
+                    result = f"❌ {site_name}: Cookie失效"
+                elif "签到成功" in page_source or "已签到" in page_source or SiteUtils.is_checkin(page_source):
+                    result = f"✅ {site_name}: 签到成功"
                 else:
-                    results.append(f"✅ {site_name}: 请求已发送")
+                    result = f"✅ {site_name}: 请求已发送"
+
+                # 重试判断：如果结果包含重试关键词，且不是最后一次尝试
+                if attempt < max_retries and retry_keywords:
+                    if any(kw in result for kw in retry_keywords):
+                        logger.info(f"{site_name}: 结果命中重试关键词，准备重试")
+                        continue
+                return result
 
             except Exception as e:
                 logger.error(f"{site.name}: 异常 {e}")
-                results.append(f"❌ {site.name}: 异常 {str(e)[:50]}")
+                if attempt < max_retries:
+                    continue
+                return f"❌ {site.name}: 异常 {str(e)[:50]}"
+
+        return f"❌ {site.name}: 重试次数耗尽"
+
+    def __clean_cache(self):
+        """清理本日缓存：清理requests缓存和临时文件"""
+        cleaned = []
+        try:
+            # 清理 requests 缓存目录
+            import glob
+            cache_patterns = [
+                "/tmp/requests_cache_*",
+                "/tmp/cache_*",
+                "/tmp/prosignin_*",
+            ]
+            for pattern in cache_patterns:
+                for f in glob.glob(pattern):
+                    try:
+                        if os.path.isfile(f):
+                            os.remove(f)
+                            cleaned.append(f)
+                    except Exception:
+                        pass
+            logger.info(f"清理缓存完成，清理{len(cleaned)}个文件")
+        except Exception as e:
+            logger.warning(f"清理缓存失败: {e}")
+        return cleaned
+
+    def stop_service(self):
+        self._enabled = False
+        try:
+            if self._scheduler:
+                self._scheduler.shutdown(wait=False)
+                self._scheduler = None
+        except Exception:
+            pass
+
+    @eventmanager.register(EventType.PluginAction)
+    def _on_plugin_action(self, event: Event):
+        event_data = getattr(event, "event_data", None) or {}
+        if event_data.get("action") != "pro_signin":
+            return
+        self.sign_in()
+
+    def sign_in(self):
+        """签到主入口：支持并发队列、失败重试、缓存清理"""
+        sites = SiteOper().list_order_by_pri()
+        if not sites:
+            logger.info("没有站点")
+            return
+
+        # 清理本日缓存（如果开启）
+        if self._clean:
+            self.__clean_cache()
+            self._clean = False
+            self.__update_config()
+
+        selected_ids = set(self._sign_sites or [])
+        if not selected_ids or "all" in selected_ids:
+            sign_sites = sites
+        else:
+            sign_sites = [s for s in sites if s.id in selected_ids]
+
+        logger.info(f"开始签到，共{len(sign_sites)}个站点，并发数={self._queue_cnt}")
+        results = []
+
+        # 并发签到
+        with ThreadPoolExecutor(max_workers=max(1, min(self._queue_cnt, 10))) as executor:
+            future_map = {executor.submit(self.__sign_one_site, site): site for site in sign_sites}
+            for future in as_completed(future_map):
+                site = future_map[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"{site.name}: 并发异常 {e}")
+                    results.append(f"❌ {site.name}: 异常 {str(e)[:50]}")
+
+        # 按站点名称排序输出
+        results.sort()
 
         if self._notify:
             notify_text = "站点签到结果：\n" + "\n".join(results)
