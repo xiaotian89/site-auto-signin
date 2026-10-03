@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.3"
+    plugin_version = "3.3.4"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -431,10 +431,11 @@ class ProSignin(_PluginBase):
                     is_cf = self.__is_cf_page(page_source)
                 
                 if page_source and not is_cf:
-                    # 检查页面是否包含滑块关键词（移除太宽泛的'captcha'，避免CF页面误判）
-                    slider_keywords = ['滑块', '滑动验证', '拖动验证', 'slider-btn', 'slider_container', 'geetest', 'nc_iconfont', '拖动滑块', 'slide-to-verify']
+                    # 检查页面是否包含滑块关键词（52PT的"请先完成滑块"也能匹配）
+                    slider_keywords = ['滑块', '滑动验证', '拖动验证', 'slider-btn', 'slider_container', 'geetest', 'nc_iconfont', '拖动滑块', 'slide-to-verify', '请先完成滑块']
                     has_slider = any(kw.lower() in page_source.lower() for kw in slider_keywords)
-                    if has_slider and self._auto_cf >= 1:
+                    # 52PT等站点只要检测到滑块就处理，不强制要求_auto_cf>=1
+                    if has_slider and (self._auto_cf >= 1 or '52pt' in site_name.lower() or '52pt' in site_url_lower):
                         _log(f"{site_name}: 检测到站点自有滑块验证码，尝试自动拖动")
                         try:
                             from playwright.sync_api import sync_playwright
@@ -725,28 +726,25 @@ class ProSignin(_PluginBase):
         return False
 
     def __handle_site_slider(self, sign_url, site_name, site_cookie):
-        """处理站点自有滑块验证码，用MP内置PlaywrightHelper，无需手动装浏览器"""
+        """处理站点自有滑块验证码，用MP内置PlaywrightHelper"""
         import time as _t
         import random as _r
         
         def slider_callback(page):
             """滑块拖动回调函数"""
-            _t.sleep(2)
+            _t.sleep(1.5)
             
-            # 52pt 等站点的滑块选择器（优先匹配）
+            # 52PT专门处理
+            is_52pt = '52pt' in site_name.lower() or '52pt' in sign_url.lower()
+            
+            if is_52pt:
+                return self.__handle_52pt_slider(page, site_name)
+            
+            # 通用滑块处理
             slider_selectors = [
-                '#slider-btn',           # 52pt 专门滑块
-                '#slider',                # 通用滑块按钮
-                '.slider-btn',            # 通用 class
-                '.slide-btn',
-                '.drag-btn',
-                '.captcha-btn',
-                '.verify-btn',
-                '.nc_iconfont.btn_slide', # 网易易盾
-                '.geetest_slider_button',  # 极验
-                '[class*="slider"]',
-                '[class*="slide"]',
-                '[class*="drag"]',
+                '#slider-btn', '#slider', '.slider-btn', '.slide-btn',
+                '.drag-btn', '.nc_iconfont.btn_slide', '.geetest_slider_button',
+                '[class*="slider"]', '[class*="slide"]', '[class*="drag"]',
             ]
             
             slider_btn = None
@@ -767,14 +765,11 @@ class ProSignin(_PluginBase):
                 _log_warn(f"{site_name}: 未找到滑块按钮元素")
                 return page.content()
             
-            _log(f"{site_name}: 找到滑块按钮")
-            
             try:
                 btn_box = slider_btn.bounding_box()
                 if not btn_box:
                     return page.content()
                 
-                # 获取滑块容器宽度
                 container_width = btn_box['width'] * 5
                 for container_sel in ['#slider-container', '.slider-container', '[class*="slider-container"]']:
                     container = page.query_selector(container_sel)
@@ -795,7 +790,6 @@ class ProSignin(_PluginBase):
                 mouse.down()
                 _t.sleep(_r.uniform(0.1, 0.2))
                 
-                # 分段拖动（模拟人类）
                 steps = _r.randint(15, 25)
                 for i in range(1, steps + 1):
                     progress = i / steps
@@ -811,40 +805,9 @@ class ProSignin(_PluginBase):
                 mouse.move(target_x, target_y)
                 _t.sleep(_r.uniform(0.1, 0.3))
                 mouse.up()
-                _t.sleep(_r.uniform(0.3, 0.6))
-                
-                _log(f"{site_name}: 滑块拖动完成")
-                
-                # 52pt 专门处理：拖动后确认提交按钮启用，点击后等待页面刷新
-                if '52pt' in site_name.lower() or '52pt' in sign_url.lower():
-                    _t.sleep(0.8)
-                    submit_btn = page.query_selector('#submit-btn')
-                    if submit_btn:
-                        is_enabled = submit_btn.is_enabled()
-                        btn_text = submit_btn.inner_text() if hasattr(submit_btn, 'inner_text') else ''
-                        _log(f"{site_name}: 提交按钮状态: enabled={is_enabled}, text={btn_text}")
-                        if is_enabled:
-                            _log(f"{site_name}: 点击提交签到按钮")
-                            submit_btn.click()
-                            try:
-                                page.wait_for_load_state("networkidle", timeout=8000)
-                            except Exception:
-                                pass
-                            _t.sleep(2)
-                            # 再次获取页面，确认签到结果
-                            new_page_source = page.content()
-                            # 检查是否还有滑块（如果还有说明没签到成功）
-                            still_has_slider = page.query_selector('#slider-btn') is not None
-                            if still_has_slider:
-                                _log_warn(f"{site_name}: 滑块仍在，签到可能未成功")
-                            return new_page_source
-                        else:
-                            _log_warn(f"{site_name}: 提交按钮未启用，滑块可能未拖到位")
-                    else:
-                        _log_warn(f"{site_name}: 未找到提交按钮")
+                _t.sleep(_r.uniform(0.5, 1.0))
                 
                 return page.content()
-                
             except Exception as e:
                 _log_warn(f"{site_name}: 滑块拖动异常: {e}")
                 return page.content()
@@ -857,13 +820,94 @@ class ProSignin(_PluginBase):
                 cookies=site_cookie,
                 ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 headless=True,
-                timeout=30
+                timeout=45
             )
             return result
         except Exception as e:
             _log_warn(f"{site_name}: PlaywrightHelper滑块处理失败: {e}")
             return None
-
+    
+    def __handle_52pt_slider(self, page, site_name):
+        """52PT专门滑块处理：简单拖到最右边，点击提交按钮"""
+        import time as _t
+        
+        try:
+            # 等待滑块加载
+            page.wait_for_selector('#slider-btn', timeout=10000)
+            _t.sleep(0.5)
+            
+            slider_btn = page.query_selector('#slider-btn')
+            container = page.query_selector('#slider-container')
+            submit_btn = page.query_selector('#submit-btn')
+            
+            if not slider_btn or not container:
+                _log_warn(f"{site_name}: 52PT滑块元素未找到")
+                return page.content()
+            
+            # 检查是否已经完成滑块
+            if submit_btn and submit_btn.is_enabled():
+                _log(f"{site_name}: 52PT滑块已完成，直接提交")
+            else:
+                btn_box = slider_btn.bounding_box()
+                c_box = container.bounding_box()
+                
+                if not btn_box or not c_box:
+                    _log_warn(f"{site_name}: 无法获取滑块位置")
+                    return page.content()
+                
+                # 52PT的maxLeft = containerWidth - 54
+                max_left = c_box['width'] - 54
+                start_x = btn_box['x'] + btn_box['width'] / 2
+                start_y = btn_box['y'] + btn_box['height'] / 2
+                # 目标位置：滑块按钮中心移到 maxLeft + 25（按钮中心）
+                target_x = c_box['x'] + max_left + 25
+                target_y = start_y
+                
+                _log(f"{site_name}: 52PT滑块拖动: start_x={start_x:.0f}, target_x={target_x:.0f}, container_width={c_box['width']:.0f}")
+                
+                mouse = page.mouse
+                mouse.move(start_x, start_y)
+                _t.sleep(0.2)
+                mouse.down()
+                _t.sleep(0.15)
+                
+                # 分3段拖动（简单但足够，52PT没有轨迹检测）
+                for i in range(1, 4):
+                    progress = i / 3
+                    current_x = start_x + (target_x - start_x) * progress
+                    mouse.move(current_x, target_y)
+                    _t.sleep(0.1)
+                
+                mouse.move(target_x, target_y)
+                _t.sleep(0.2)
+                mouse.up()
+                _t.sleep(1.0)  # 等待JS验证完成
+            
+            # 检查提交按钮是否启用
+            submit_btn = page.query_selector('#submit-btn')
+            if submit_btn:
+                is_enabled = submit_btn.is_enabled()
+                btn_text = submit_btn.inner_text() if hasattr(submit_btn, 'inner_text') else ''
+                _log(f"{site_name}: 52PT提交按钮状态: enabled={is_enabled}, text={btn_text}")
+                
+                if is_enabled:
+                    _log(f"{site_name}: 52PT点击提交签到按钮")
+                    submit_btn.click()
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=8000)
+                    except Exception:
+                        pass
+                    _t.sleep(2)
+                    return page.content()
+                else:
+                    _log_warn(f"{site_name}: 52PT提交按钮未启用，滑块可能未拖到位")
+            else:
+                _log_warn(f"{site_name}: 52PT未找到提交按钮")
+            
+            return page.content()
+        except Exception as e:
+            _log_warn(f"{site_name}: 52PT滑块处理异常: {e}")
+            return page.content()
 
     def __clean_cache(self):
         """清理本插件本日缓存：仅清理prosignin自己的临时文件，不碰MP全局或其他插件"""
