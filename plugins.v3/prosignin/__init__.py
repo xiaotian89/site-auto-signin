@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.4"
+    plugin_version = "3.3.5"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -828,7 +828,7 @@ class ProSignin(_PluginBase):
             return None
     
     def __handle_52pt_slider(self, page, site_name):
-        """52PT专门滑块处理：简单拖到最右边，点击提交按钮"""
+        """52PT专门滑块处理：用JS直接设置滑块位置+触发事件完成验证，然后提交"""
         import time as _t
         
         try:
@@ -836,52 +836,59 @@ class ProSignin(_PluginBase):
             page.wait_for_selector('#slider-btn', timeout=10000)
             _t.sleep(0.5)
             
-            slider_btn = page.query_selector('#slider-btn')
-            container = page.query_selector('#slider-container')
-            submit_btn = page.query_selector('#submit-btn')
+            # 用JS直接完成滑块验证（52PT没有轨迹检测，已验证可行）
+            js_slider_code = """
+            (function() {
+                var slider = document.getElementById('slider-btn');
+                var bg = document.getElementById('slider-bg');
+                var container = document.getElementById('slider-container');
+                var submitBtn = document.getElementById('submit-btn');
+                
+                if (!slider || !container) {
+                    return 'slider elements not found';
+                }
+                
+                // 如果已经完成，直接返回
+                if (submitBtn && !submitBtn.disabled) {
+                    return 'already completed';
+                }
+                
+                var maxLeft = container.offsetWidth - 54;
+                var btnRect = slider.getBoundingClientRect();
+                var containerRect = container.getBoundingClientRect();
+                
+                // 1. 触发mousedown事件
+                var mouseDownEvent = new MouseEvent('mousedown', {
+                    bubbles: true, cancelable: true,
+                    clientX: btnRect.left + 25, clientY: btnRect.top + 18
+                });
+                slider.dispatchEvent(mouseDownEvent);
+                
+                // 2. 设置滑块位置（拖到最右边）
+                slider.style.left = maxLeft + 'px';
+                bg.style.width = (maxLeft + 25) + 'px';
+                
+                // 3. 触发mousemove事件
+                var mouseMoveEvent = new MouseEvent('mousemove', {
+                    bubbles: true, cancelable: true,
+                    clientX: containerRect.left + maxLeft + 25, clientY: btnRect.top + 18
+                });
+                document.dispatchEvent(mouseMoveEvent);
+                
+                // 4. 触发mouseup事件
+                var mouseUpEvent = new MouseEvent('mouseup', {
+                    bubbles: true, cancelable: true,
+                    clientX: containerRect.left + maxLeft + 25, clientY: btnRect.top + 18
+                });
+                document.dispatchEvent(mouseUpEvent);
+                
+                return 'slider completed: maxLeft=' + maxLeft;
+            })();
+            """
             
-            if not slider_btn or not container:
-                _log_warn(f"{site_name}: 52PT滑块元素未找到")
-                return page.content()
-            
-            # 检查是否已经完成滑块
-            if submit_btn and submit_btn.is_enabled():
-                _log(f"{site_name}: 52PT滑块已完成，直接提交")
-            else:
-                btn_box = slider_btn.bounding_box()
-                c_box = container.bounding_box()
-                
-                if not btn_box or not c_box:
-                    _log_warn(f"{site_name}: 无法获取滑块位置")
-                    return page.content()
-                
-                # 52PT的maxLeft = containerWidth - 54
-                max_left = c_box['width'] - 54
-                start_x = btn_box['x'] + btn_box['width'] / 2
-                start_y = btn_box['y'] + btn_box['height'] / 2
-                # 目标位置：滑块按钮中心移到 maxLeft + 25（按钮中心）
-                target_x = c_box['x'] + max_left + 25
-                target_y = start_y
-                
-                _log(f"{site_name}: 52PT滑块拖动: start_x={start_x:.0f}, target_x={target_x:.0f}, container_width={c_box['width']:.0f}")
-                
-                mouse = page.mouse
-                mouse.move(start_x, start_y)
-                _t.sleep(0.2)
-                mouse.down()
-                _t.sleep(0.15)
-                
-                # 分3段拖动（简单但足够，52PT没有轨迹检测）
-                for i in range(1, 4):
-                    progress = i / 3
-                    current_x = start_x + (target_x - start_x) * progress
-                    mouse.move(current_x, target_y)
-                    _t.sleep(0.1)
-                
-                mouse.move(target_x, target_y)
-                _t.sleep(0.2)
-                mouse.up()
-                _t.sleep(1.0)  # 等待JS验证完成
+            result = page.evaluate(js_slider_code)
+            _log(f"{site_name}: 52PT JS滑块验证结果: {result}")
+            _t.sleep(1.0)  # 等待JS验证完成
             
             # 检查提交按钮是否启用
             submit_btn = page.query_selector('#submit-btn')
@@ -900,7 +907,7 @@ class ProSignin(_PluginBase):
                     _t.sleep(2)
                     return page.content()
                 else:
-                    _log_warn(f"{site_name}: 52PT提交按钮未启用，滑块可能未拖到位")
+                    _log_warn(f"{site_name}: 52PT提交按钮未启用，JS验证可能未生效")
             else:
                 _log_warn(f"{site_name}: 52PT未找到提交按钮")
             

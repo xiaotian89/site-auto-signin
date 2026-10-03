@@ -3,7 +3,7 @@
     "name": "站点自动签到Pro",
     "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
     "labels": "工具,签到",
-    "version": "3.3.4",
+    "version": "3.3.5",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
@@ -44,7 +44,8 @@
       "v3.3.1": "修复馒头等API密钥站点被cookie检查拦截-API判断移到cookie检查之前",
       "v3.3.2": "修复朱雀签到缺少cookie检查-朱雀是用cookie的释放技能签到不是密钥",
       "v3.3.3": "修复肉丝API地址(/api/points/attendance)+PT时间签到URL(attendance.php?type=list)",
-      "v3.3.4": "重写52PT滑块处理逻辑-专门针对52PT优化拖动+修复滑块检测触发条件"
+      "v3.3.4": "重写52PT滑块处理逻辑-专门针对52PT优化拖动+修复滑块检测触发条件",
+      "v3.3.5": "52PT滑块改用JS直接验证(设置位置+触发mouse事件)-已实测可行+自动提交签到"
     }
   }
 }
