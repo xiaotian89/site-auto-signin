@@ -1,9 +1,9 @@
 {
   "ProSignin": {
     "name": "站点自动签到Pro",
-    "description": "自动签到MP里所有已添加站点，FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。",
+    "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
     "labels": "工具,签到",
-    "version": "3.0.3",
+    "version": "3.0.4",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
@@ -19,7 +19,8 @@
       "v3.0.0": "重大更新：新增详细数据页面-统计卡片+签到状态表格+最近7天历史记录，签到结果持久化保存",
       "v3.0.1": "修复详细数据页面-改用原生div+CSS参考autosignin实现，确保MP前端正确渲染",
       "v3.0.2": "修复无签到记录时页面显示HTML源码-表格改用标准组件嵌套，不用raw组件",
-      "v3.0.3": "执行周期改为下拉选择-提供常用cron选项，支持自定义输入"
+      "v3.0.3": "执行周期改为下拉选择-提供常用cron选项，支持自定义输入",
+      "v3.0.4": "简化插件介绍描述"
     }
   }
 }
