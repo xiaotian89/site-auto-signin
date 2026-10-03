@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.8"
+    plugin_version = "3.2.9"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -468,9 +468,9 @@ class ProSignin(_PluginBase):
                     result = f"⚠️ {site_name}: CF挑战"
                 elif not SiteUtils.is_logged_in(page_source):
                     result = f"❌ {site_name}: Cookie失效"
-                elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source:
+                elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source or "已簽到" in page_source or "今日已簽到" in page_source or "已經簽到" in page_source or "請勿重複簽到" in page_source:
                     result = f"✅ {site_name}: 已签到"
-                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or "签到奖励" in page_source or "获得魔力" in page_source or "魔力+" in page_source or "打卡成功" in page_source or "今日签到" in page_source or "签到已完成" in page_source or SiteUtils.is_checkin(page_source):
+                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or "签到奖励" in page_source or "获得魔力" in page_source or "魔力+" in page_source or "打卡成功" in page_source or "今日签到" in page_source or "签到已完成" in page_source or "簽到成功" in page_source or "簽到完成" in page_source or "簽到獎勵" in page_source or "獲得魔力" in page_source or "打卡成功" in page_source or "签到已得" in page_source or "簽到已得" in page_source or "已得" in page_source or SiteUtils.is_checkin(page_source):
                     result = f"✅ {site_name}: 签到成功"
                 elif "魔力值" in page_source:
                     # "魔力值"太宽泛，很多页面本身就有魔力值显示，不能单独作为成功依据
