@@ -27,9 +27,9 @@ class ProSignin(_PluginBase):
     """站点自动签到Pro。"""
 
     plugin_name = "站点自动签到Pro"
-    plugin_desc = "自动签到MP里所有已添加站点，FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。"
+    plugin_desc = "自动签到MP里所有已添加站点，智能降级：先普通请求，检测CF挑战自动走FlareSolverr，失败降级Playwright。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "2.0.4"
+    plugin_version = "2.0.5"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -177,7 +177,7 @@ class ProSignin(_PluginBase):
         return [
             {
                 'component': 'VAlert',
-                'props': {'type': 'info', 'variant': 'tonal', 'text': '站点自动签到Pro v2.0.0：自动签到所有已选站点，FlareSolverr优先过CF，失败降级Playwright。', 'class': 'mt-4'}
+                'props': {'type': 'info', 'variant': 'tonal', 'text': '站点自动签到Pro v2.0.5：智能降级，先普通请求，检测到CF挑战自动走FlareSolverr，失败降级Playwright。', 'class': 'mt-4'}
             }
         ]
 
@@ -225,7 +225,19 @@ class ProSignin(_PluginBase):
                 sign_url = f"{site_url.rstrip('/')}/attendance.php"
                 page_source = None
 
-                if self._auto_cf == 1:
+                # 智能降级：先普通请求，检测到CF挑战再走FlareSolverr，最后Playwright
+                # 第1步：普通请求（最快）
+                try:
+                    resp = RequestUtils(cookies=site_cookie, timeout=30).get_res(url=sign_url)
+                    if resp and resp.status_code == 200:
+                        page_source = resp.text
+                except Exception as e:
+                    logger.warning(f"普通请求失败: {e}")
+
+                # 第2步：检测是否CF挑战，是则降级FlareSolverr
+                if page_source and under_challenge(page_source) and self._auto_cf >= 1:
+                    logger.info(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
+                    page_source = None
                     try:
                         payload = {
                             "cmd": "request.get",
@@ -241,7 +253,10 @@ class ProSignin(_PluginBase):
                     except Exception as e:
                         logger.warning(f"FlareSolverr失败: {e}")
 
-                if not page_source and self._auto_cf == 2:
+                # 第3步：FlareSolverr仍失败或仍有CF挑战，降级Playwright
+                if page_source and under_challenge(page_source) and self._auto_cf >= 2:
+                    logger.info(f"{site_name}: FlareSolverr未过CF，降级Playwright")
+                    page_source = None
                     try:
                         page_source = PlaywrightHelper().get_page_source(
                             url=sign_url,
@@ -251,14 +266,6 @@ class ProSignin(_PluginBase):
                         )
                     except Exception as e:
                         logger.warning(f"Playwright失败: {e}")
-
-                if not page_source:
-                    try:
-                        resp = RequestUtils(cookies=site_cookie, timeout=30).get_res(url=sign_url)
-                        if resp and resp.status_code == 200:
-                            page_source = resp.text
-                    except Exception as e:
-                        logger.warning(f"普通请求失败: {e}")
 
                 if not page_source:
                     results.append(f"❌ {site_name}: 请求失败")
