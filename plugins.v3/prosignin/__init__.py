@@ -31,7 +31,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "自动签到所有已选站点，并发队列+失败重试+智能降级+详细数据统计页(今日状态+7天历史)，支持清理缓存。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.0.2"
+    plugin_version = "3.0.3"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -148,7 +148,20 @@ class ProSignin(_PluginBase):
                     {
                         'component': 'VRow',
                         'content': [
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'cron', 'label': '执行周期', 'placeholder': '5位cron'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VSelect', 'props': {'model': 'cron', 'label': '执行周期', 'autocomplete': True, 'clearable': True, 'placeholder': '选择或输入cron', 'items': [
+                                {'title': '每天 0:00', 'value': '0 0 * * *'},
+                                {'title': '每天 6:00', 'value': '0 6 * * *'},
+                                {'title': '每天 7:00', 'value': '0 7 * * *'},
+                                {'title': '每天 8:00', 'value': '0 8 * * *'},
+                                {'title': '每天 9:00', 'value': '0 9 * * *'},
+                                {'title': '每天 10:00', 'value': '0 10 * * *'},
+                                {'title': '每天 12:00', 'value': '0 12 * * *'},
+                                {'title': '每天 18:00', 'value': '0 18 * * * *'},
+                                {'title': '每天 22:00', 'value': '0 22 * * *'},
+                                {'title': '每小时', 'value': '0 * * * *'},
+                                {'title': '每30分钟', 'value': '*/30 * * * *'},
+                                {'title': '每10分钟', 'value': '*/10 * * * *'},
+                            ]}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'queue_cnt', 'label': '队列数量'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_keyword', 'label': '重试关键词'}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_cf', 'label': '自动优选(0关闭1FlareSolverr2Playwright)'}}]},
