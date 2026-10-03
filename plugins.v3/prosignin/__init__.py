@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.1.3"
+    plugin_version = "3.2.0"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -71,10 +71,10 @@ class ProSignin(_PluginBase):
             self._cron = config.get("cron")
             self._onlyonce = config.get("onlyonce")
             self._notify = config.get("notify")
-            self._queue_cnt = config.get("queue_cnt") or 5
+            self._queue_cnt = int(config.get("queue_cnt") or 5)
             self._sign_sites = config.get("sign_sites") or []
             self._retry_keyword = config.get("retry_keyword")
-            self._auto_cf = config.get("auto_cf") or 0
+            self._auto_cf = int(config.get("auto_cf") or 0)
             self._clean = config.get("clean")
             self._flaresolverr_url = config.get("flaresolverr_url") or "http://192.168.2.70:8191/v1"
 
@@ -350,7 +350,7 @@ class ProSignin(_PluginBase):
                     if resp and resp.status_code == 200:
                         page_source = resp.text
                 except Exception as e:
-                    _log_warn(f"{site_name}: 普通请求失败: {e}")
+                    _log_warn(f"{site_name}: 普通请求失败: {e}, URL: {sign_url}")
 
                 # 第2步：检测CF挑战，降级FlareSolverr
                 if page_source and under_challenge(page_source) and self._auto_cf >= 1:
@@ -417,6 +417,7 @@ class ProSignin(_PluginBase):
                             _log_warn(f"{site_name}: 滑块自动处理失败: {e}")
 
                 if not page_source:
+                    _log_warn(f"{site_name}: 请求失败，page_source为空，URL: {sign_url}")
                     result = f"❌ {site_name}: 请求失败"
                 elif under_challenge(page_source):
                     result = f"⚠️ {site_name}: CF挑战"
@@ -614,7 +615,7 @@ class ProSignin(_PluginBase):
             # 只保留最近30天
             if "history" in history:
                 cutoff = (datetime.now() - _td(days=30)).strftime("%Y-%m-%d")
-                history["history"] = {k: v for k, v in history["history"].items() if k >= cutoff}
+                history["history"] = {k: v for k, v in history["history"].items() if isinstance(k, str) and k >= cutoff}
             with open(self._history_file, 'w', encoding='utf-8') as f:
                 json.dump(history, f, ensure_ascii=False, indent=2)
         except Exception as e:
