@@ -31,7 +31,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "自动签到所有已选站点，并发队列+失败重试+智能降级+详细数据统计页(今日状态+7天历史)，支持清理缓存。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.0.0"
+    plugin_version = "3.0.1"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -177,151 +177,106 @@ class ProSignin(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
-        """详细数据页面：统计卡片+签到状态表格+7天历史"""
+        """详细数据页面：原生div+CSS，参考autosignin实现方式"""
         history = self.__load_history()
         today = datetime.now().strftime("%Y-%m-%d")
         today_data = history.get("history", {}).get(today, {})
 
-        # 统计
         total = len(today_data)
         success = sum(1 for v in today_data.values() if v.get("status") == "success")
         failed = sum(1 for v in today_data.values() if v.get("status") == "failed")
         warning = sum(1 for v in today_data.values() if v.get("status") == "warning")
+        history_days = len(history.get("history", {}))
 
-        # 最近7天日期
-        days = []
+        display_dates = []
         for i in range(6, -1, -1):
             d = (datetime.now() - _td(days=i)).strftime("%Y-%m-%d")
-            days.append(d)
+            display_dates.append(d)
 
-        # 构建站点列表（今天的 + 历史出现过的）
         all_sites = set(today_data.keys())
-        for d in days:
+        for d in display_dates:
             all_sites.update(history.get("history", {}).get(d, {}).keys())
         all_sites = sorted(all_sites)
 
-        # 状态颜色映射
-        status_color = {"success": "green", "failed": "red", "warning": "orange"}
-        status_icon = {"success": "✅", "failed": "❌", "warning": "⚠️"}
-
-        # 构建表格行
-        table_rows = []
+        site_rows = ""
         for site in all_sites:
             today_info = today_data.get(site, {"status": "none", "message": ""})
             today_status = today_info.get("status", "none")
             today_msg = today_info.get("message", "")
 
-            # 7天历史状态点
-            history_dots = []
-            for d in days:
+            if today_status == "success":
+                sc = "prosignin-dot--success"; si = "✓"; st = today_msg or "签到成功"
+            elif today_status == "failed":
+                sc = "prosignin-dot--error"; si = "✗"; st = today_msg or "签到失败"
+            elif today_status == "warning":
+                sc = "prosignin-dot--warning"; si = "!"; st = today_msg or "异常"
+            else:
+                sc = "prosignin-dot--none"; si = "-"; st = "未记录"
+
+            dots = ""
+            for d in display_dates:
                 day_info = history.get("history", {}).get(d, {}).get(site, {})
-                day_status = day_info.get("status", "none")
-                color = status_color.get(day_status, "grey")
-                icon = status_icon.get(day_status, "⚪")
-                history_dots.append({
-                    'component': 'VTooltip',
-                    'props': {'text': f'{d}: {day_info.get("message", day_status)}'},
-                    'content': [{
-                        'component': 'VChip',
-                        'props': {'color': color, 'size': 'x-small', 'variant': 'flat', 'label': True},
-                        'content': [{'component': 'span', 'props': {'text': icon}}]
-                    }]
-                })
+                ds = day_info.get("status", "none")
+                dm = day_info.get("message", "")
+                if ds == "success":
+                    dc = "prosignin-dot--success"; di = "✓"
+                elif ds == "failed":
+                    dc = "prosignin-dot--error"; di = "✗"
+                elif ds == "warning":
+                    dc = "prosignin-dot--warning"; di = "!"
+                else:
+                    dc = "prosignin-dot--none"; di = "-"
+                dots += '<div class="prosignin-dot-cell" title="' + d + ': ' + (dm or ds) + '"><span class="prosignin-dot ' + dc + '">' + di + '</span></div>'
 
-            row = {
-                'component': 'VTableRow',
-                'content': [
-                    {'component': 'VTableCell', 'content': [{'component': 'span', 'props': {'text': site, 'class': 'font-medium'}}]},
-                    {'component': 'VTableCell', 'content': [{
-                        'component': 'VChip',
-                        'props': {'color': status_color.get(today_status, 'grey'), 'size': 'small', 'variant': 'tonal'},
-                        'content': [{'component': 'span', 'props': {'text': f'{status_icon.get(today_status, "⚪")} {today_msg or today_status}'}}]
-                    }]},
-                    {'component': 'VTableCell', 'content': history_dots},
-                ]
-            }
-            table_rows.append(row)
+            site_rows += '<tr><td><div class="prosignin-site-name">' + site + '</div></td><td class="prosignin-status-cell"><span class="prosignin-dot ' + sc + '" style="margin-right:6px;">' + si + '</span><span>' + st + '</span></td>' + dots + '</tr>'
 
-        # 页面组件
+        if not all_sites:
+            site_rows = '<tr><td colspan="9" style="text-align:center;padding:24px;color:rgba(var(--v-theme-on-surface),.56);">暂无签到记录，请先运行一次签到</td></tr>'
+
+        date_headers = ""
+        for d in display_dates:
+            date_headers += '<th class="prosignin-dot-cell" title="' + d + '">' + d[5:] + '</th>'
+
+        css = ".prosignin-page{display:flex;flex-direction:column;gap:12px}.prosignin-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.prosignin-stat{min-width:0;padding:10px 12px;border:1px solid rgba(var(--v-theme-on-surface),.08);border-radius:8px}.prosignin-stat__head{display:flex;align-items:center;gap:6px;color:rgba(var(--v-theme-on-surface),.6);font-size:.75rem;font-weight:600}.prosignin-stat__value{margin-top:8px;font-size:1.25rem;font-weight:700;line-height:1}.prosignin-stat__meta{margin-top:4px;color:rgba(var(--v-theme-on-surface),.5);font-size:.72rem}.prosignin-section-title{font-size:.95rem;font-weight:700;margin-bottom:8px}.prosignin-table-wrap{overflow-x:auto;border:1px solid rgba(var(--v-theme-on-surface),.08);border-radius:8px}.prosignin-table{width:100%;border-collapse:collapse;min-width:620px}.prosignin-table th{height:34px;padding:0 8px;color:rgba(var(--v-theme-on-surface),.62);font-size:.75rem;font-weight:600;white-space:nowrap;text-align:left;border-bottom:1px solid rgba(var(--v-theme-on-surface),.08)}.prosignin-table td{height:38px;padding:0 8px;vertical-align:middle;border-bottom:1px solid rgba(var(--v-theme-on-surface),.05)}.prosignin-table tbody tr:last-child td{border-bottom:0}.prosignin-site-name{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}.prosignin-status-cell{min-width:120px}.prosignin-dot-cell{width:40px;text-align:center}.prosignin-dot{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;border:1px solid transparent;font-weight:700;font-size:12px}.prosignin-dot--success{color:rgb(var(--v-theme-success));background:rgba(var(--v-theme-success),.24);border-color:rgba(var(--v-theme-success),.38)}.prosignin-dot--warning{color:rgb(var(--v-theme-warning));background:rgba(var(--v-theme-warning),.30);border-color:rgba(var(--v-theme-warning),.48)}.prosignin-dot--error{color:rgb(var(--v-theme-error));background:rgba(var(--v-theme-error),.26);border-color:rgba(var(--v-theme-error),.42)}.prosignin-dot--none{color:rgba(var(--v-theme-on-surface),.68);background:rgba(var(--v-theme-on-surface),.14);border-color:rgba(var(--v-theme-on-surface),.22)}@media(max-width:720px){.prosignin-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.prosignin-table{min-width:560px}}"
+
         page = [
-            # 统计卡片行
-            {
-                'component': 'VRow',
-                'props': {'class': 'mb-4'},
-                'content': [
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{
-                        'component': 'VCard',
-                        'props': {'variant': 'tonal', 'color': 'primary', 'class': 'pa-4'},
-                        'content': [
-                            {'component': 'div', 'props': {'text': '今日签到', 'class': 'text-caption text-medium-emphasis'}},
-                            {'component': 'div', 'props': {'text': f'{success}/{total}', 'class': 'text-h5 font-bold mt-1'}},
-                            {'component': 'div', 'props': {'text': f'失败{failed} · 异常{warning}', 'class': 'text-caption mt-1'}},
-                        ]
-                    }]},
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{
-                        'component': 'VCard',
-                        'props': {'variant': 'tonal', 'color': 'success', 'class': 'pa-4'},
-                        'content': [
-                            {'component': 'div', 'props': {'text': '签到成功', 'class': 'text-caption text-medium-emphasis'}},
-                            {'component': 'div', 'props': {'text': f'{success}', 'class': 'text-h5 font-bold mt-1'}},
-                        ]
-                    }]},
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{
-                        'component': 'VCard',
-                        'props': {'variant': 'tonal', 'color': 'error', 'class': 'pa-4'},
-                        'content': [
-                            {'component': 'div', 'props': {'text': '签到失败', 'class': 'text-caption text-medium-emphasis'}},
-                            {'component': 'div', 'props': {'text': f'{failed}', 'class': 'text-h5 font-bold mt-1'}},
-                        ]
-                    }]},
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{
-                        'component': 'VCard',
-                        'props': {'variant': 'tonal', 'color': 'info', 'class': 'pa-4'},
-                        'content': [
-                            {'component': 'div', 'props': {'text': '历史记录', 'class': 'text-caption text-medium-emphasis'}},
-                            {'component': 'div', 'props': {'text': f'{len(history.get("history", {}))}天', 'class': 'text-h5 font-bold mt-1'}},
-                            {'component': 'div', 'props': {'text': '最近7天详情见下表', 'class': 'text-caption mt-1'}},
-                        ]
-                    }]},
-                ]
-            },
-            # 签到状态表格
-            {
-                'component': 'VCard',
-                'props': {'variant': 'outlined', 'class': 'pa-4'},
-                'content': [
-                    {'component': 'div', 'props': {'text': '签到状态（最近7天）', 'class': 'text-subtitle-1 font-bold mb-3'}},
-                    {
-                        'component': 'VTable',
-                        'props': {'density': 'comfortable', 'hover': True},
-                        'content': [
-                            {
-                                'component': 'thead',
-                                'content': [{
-                                    'component': 'VTableRow',
-                                    'content': [
-                                        {'component': 'VTableHeader', 'props': {'text': '站点'}},
-                                        {'component': 'VTableHeader', 'props': {'text': '今日状态'}},
-                                        {'component': 'VTableHeader', 'props': {'text': '近7天历史（从左到右：6天前→今天）'}},
-                                    ]
-                                }]
-                            },
-                            {
-                                'component': 'tbody',
-                                'content': table_rows if table_rows else [{
-                                    'component': 'VTableRow',
-                                    'content': [{'component': 'VTableCell', 'props': {'text': '暂无签到记录，请先运行一次签到', 'colspan': '3', 'class': 'text-center text-medium-emphasis'}}]
-                                }]
-                            }
-                        ]
-                    }
-                ]
-            },
-            # 底部提示
-            {
-                'component': 'VAlert',
-                'props': {'type': 'info', 'variant': 'tonal', 'text': '站点自动签到Pro v3.0.0：并发队列+失败重试+智能降级(普通请求→FlareSolverr→Playwright)+详细数据统计。历史记录保存在 /config/prosignin_history.json，保留最近30天。', 'class': 'mt-4'}
-            }
+            {'component': 'style', 'text': css},
+            {'component': 'div', 'props': {'class': 'prosignin-page'}, 'content': [
+                {'component': 'div', 'props': {'class': 'prosignin-summary'}, 'content': [
+                    {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '📊 今日签到'}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(success) + '/' + str(total)}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__meta', 'text': '失败' + str(failed) + ' · 异常' + str(warning)}},
+                    ]},
+                    {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '✅ 签到成功'}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(success)}},
+                    ]},
+                    {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '❌ 签到失败'}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(failed)}},
+                    ]},
+                    {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '📅 历史记录'}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(history_days) + '天'}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__meta', 'text': '最近7天详情见下表'}},
+                    ]},
+                ]},
+                {'component': 'div', 'props': {}, 'content': [
+                    {'component': 'div', 'props': {'class': 'prosignin-section-title', 'text': '签到状态（最近7天）'}},
+                    {'component': 'div', 'props': {'class': 'prosignin-table-wrap'}, 'content': [
+                        {'component': 'table', 'props': {'class': 'prosignin-table'}, 'content': [
+                            {'component': 'thead', 'content': [{'component': 'tr', 'content': [
+                                {'component': 'th', 'props': {'text': '站点'}},
+                                {'component': 'th', 'props': {'text': '今日状态'}},
+                                {'component': 'raw', 'text': date_headers},
+                            ]}]},
+                            {'component': 'tbody', 'content': [{'component': 'raw', 'text': site_rows}]},
+                        ]}
+                    ]},
+                ]},
+                {'component': 'div', 'props': {'style': 'color:rgba(var(--v-theme-on-surface),.5);font-size:.72rem;margin-top:4px;', 'text': '站点自动签到Pro v3.0.1 · 并发队列+失败重试+智能降级 · 历史记录保存在 /config/prosignin_history.json，保留最近30天'}},
+            ]}
         ]
         return page
 
