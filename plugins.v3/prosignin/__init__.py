@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.5"
+    plugin_version = "3.2.6"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -464,8 +464,15 @@ class ProSignin(_PluginBase):
                     result = f"❌ {site_name}: Cookie失效"
                 elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source:
                     result = f"✅ {site_name}: 已签到"
-                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or "魔力值" in page_source or SiteUtils.is_checkin(page_source):
+                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or SiteUtils.is_checkin(page_source):
                     result = f"✅ {site_name}: 签到成功"
+                elif "魔力值" in page_source:
+                    # "魔力值"太宽泛，很多页面本身就有魔力值显示，不能单独作为成功依据
+                    # 只有同时包含签到相关关键词才认为成功
+                    if any(kw in page_source for kw in ['签到', '签退', '打卡', '奖励', '获得', '增加', '魔力+']):
+                        result = f"✅ {site_name}: 签到成功"
+                    else:
+                        result = f"⚠️ {site_name}: 状态未知(页面含魔力值但无签到提示)"
                 elif "请先完成滑块" in page_source or "拖动滑块" in page_source:
                     result = f"❌ {site_name}: 滑块验证未通过"
                 else:
@@ -759,20 +766,33 @@ class ProSignin(_PluginBase):
                 
                 _log(f"{site_name}: 滑块拖动完成")
                 
-                # 52pt 专门处理：拖动后点击提交签到按钮
+                # 52pt 专门处理：拖动后确认提交按钮启用，点击后等待页面刷新
                 if '52pt' in site_name.lower() or '52pt' in sign_url.lower():
-                    _t.sleep(0.5)
+                    _t.sleep(0.8)
                     submit_btn = page.query_selector('#submit-btn')
-                    if submit_btn and submit_btn.is_enabled():
-                        _log(f"{site_name}: 点击提交签到按钮")
-                        submit_btn.click()
-                        try:
-                            page.wait_for_load_state(timeout=5000)
-                        except Exception:
-                            pass
-                        _t.sleep(1.5)
+                    if submit_btn:
+                        is_enabled = submit_btn.is_enabled()
+                        btn_text = submit_btn.inner_text() if hasattr(submit_btn, 'inner_text') else ''
+                        _log(f"{site_name}: 提交按钮状态: enabled={is_enabled}, text={btn_text}")
+                        if is_enabled:
+                            _log(f"{site_name}: 点击提交签到按钮")
+                            submit_btn.click()
+                            try:
+                                page.wait_for_load_state("networkidle", timeout=8000)
+                            except Exception:
+                                pass
+                            _t.sleep(2)
+                            # 再次获取页面，确认签到结果
+                            new_page_source = page.content()
+                            # 检查是否还有滑块（如果还有说明没签到成功）
+                            still_has_slider = page.query_selector('#slider-btn') is not None
+                            if still_has_slider:
+                                _log_warn(f"{site_name}: 滑块仍在，签到可能未成功")
+                            return new_page_source
+                        else:
+                            _log_warn(f"{site_name}: 提交按钮未启用，滑块可能未拖到位")
                     else:
-                        _log_warn(f"{site_name}: 提交按钮未启用")
+                        _log_warn(f"{site_name}: 未找到提交按钮")
                 
                 return page.content()
                 
