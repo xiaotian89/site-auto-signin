@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.2"
+    plugin_version = "3.2.3"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -406,12 +406,17 @@ class ProSignin(_PluginBase):
                         _log_warn(f"{site_name}: Playwright失败: {e}")
 
                 # 第3.5步：检测站点自有滑块验证码，自动拖动
-                if page_source and not under_challenge(page_source):
-                    # 检查页面是否包含滑块关键词
-                    slider_keywords = ['滑块', '滑动验证', '拖动验证', 'slider', 'captcha', 'geetest', 'nc_iconfont']
+                # 先严格排除CF挑战页面，避免CF五秒盾被误判为滑块
+                is_cf = under_challenge(page_source) if page_source else False
+                if not is_cf and page_source:
+                    is_cf = self.__is_cf_page(page_source)
+                
+                if page_source and not is_cf:
+                    # 检查页面是否包含滑块关键词（移除太宽泛的'captcha'，避免CF页面误判）
+                    slider_keywords = ['滑块', '滑动验证', '拖动验证', 'slider-btn', 'slider_container', 'geetest', 'nc_iconfont', '拖动滑块', 'slide-to-verify']
                     has_slider = any(kw.lower() in page_source.lower() for kw in slider_keywords)
                     if has_slider and self._auto_cf >= 1:
-                        _log(f"{site_name}: 检测到站点滑块验证码，尝试自动拖动")
+                        _log(f"{site_name}: 检测到站点自有滑块验证码，尝试自动拖动")
                         try:
                             from playwright.sync_api import sync_playwright
                             with sync_playwright() as p:
@@ -465,6 +470,27 @@ class ProSignin(_PluginBase):
 
         return f"❌ {site.name}: 重试次数耗尽"
 
+
+    @staticmethod
+    def __is_cf_page(page_source):
+        """更全面的CF挑战页面检测，避免误判为站点自有滑块"""
+        if not page_source:
+            return False
+        page_lower = page_source.lower()
+        # CF 特有关键词（标题、正文、JS变量）
+        cf_keywords = [
+            'just a moment', '请稍候', 'checking your browser',
+            'cloudflare', 'ray id', 'ray_id', 'cf-challenge',
+            'cf-please-wait', 'challenge-spinner', 'attack-box',
+            'attention required', 'security check', 'verify you are human',
+            'trk_jschal', 'jschl_vc', 'jschl_answer',
+            'ddos-guard', 'ddos protection',
+            'captcha-bypass', 'cf-turnstile',
+        ]
+        for kw in cf_keywords:
+            if kw in page_lower:
+                return True
+        return False
 
     def __handle_site_slider(self, sign_url, site_name, site_cookie):
         """处理站点自有滑块验证码，用MP内置PlaywrightHelper，无需手动装浏览器"""

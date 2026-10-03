@@ -3,7 +3,7 @@
     "name": "站点自动签到Pro",
     "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
     "labels": "工具,签到",
-    "version": "3.2.2",
+    "version": "3.2.3",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
@@ -33,7 +33,8 @@
       "v3.1.3": "修复52pt签到-自定义签到URL52bakatestdate0823.php+滑块后真正提交表单+优化成功判定",
       "v3.2.0": "一次性修复所有问题：_auto_cf类型转换修复str>=int异常、历史记录类型安全、请求失败详细日志",
       "v3.2.1": "滑块处理改用MP内置PlaywrightHelper.action()，无需用户手动安装浏览器，CloakBrowser反检测更好",
-      "v3.2.2": "添加通用签到URL fallback机制-attendance.php失败自动尝试signin/sign/checkin等7种常见URL+详细状态码日志"
+      "v3.2.2": "添加通用签到URL fallback机制-attendance.php失败自动尝试signin/sign/checkin等7种常见URL+详细状态码日志",
+      "v3.2.3": "修复CF五秒盾被误判为站点自有滑块-增加全面CF检测+滑块检测前先排除CF页面+优化滑块关键词"
     }
   }
 }
