@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.1"
+    plugin_version = "3.2.2"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -344,13 +344,33 @@ class ProSignin(_PluginBase):
                     sign_url = f"{site_url.rstrip('/')}/attendance.php"
                 page_source = None
 
-                # 第1步：普通请求（最快）
-                try:
-                    resp = RequestUtils(cookies=site_cookie, timeout=30).get_res(url=sign_url)
-                    if resp and resp.status_code == 200:
-                        page_source = resp.text
-                except Exception as e:
-                    _log_warn(f"{site_name}: 普通请求失败: {e}, URL: {sign_url}")
+                # 第1步：普通请求（最快），带URL fallback
+                fallback_urls = [
+                    sign_url,
+                    f"{site_url.rstrip('/')}/signin.php",
+                    f"{site_url.rstrip('/')}/sign.php",
+                    f"{site_url.rstrip('/')}/checkin.php",
+                    f"{site_url.rstrip('/')}/plugin.php?id=sign",
+                    f"{site_url.rstrip('/')}/dailycheckin.php",
+                    f"{site_url.rstrip('/')}/index.php?action=sign",
+                ]
+                for try_url in fallback_urls:
+                    try:
+                        resp = RequestUtils(cookies=site_cookie, timeout=15).get_res(url=try_url)
+                        if resp and resp.status_code == 200 and resp.text and len(resp.text) > 100:
+                            # 检查是否是404页面或空页面
+                            if '404' in resp.text[:500] and 'Not Found' in resp.text[:500]:
+                                _log_warn(f"{site_name}: URL返回404: {try_url}")
+                                continue
+                            page_source = resp.text
+                            if try_url != sign_url:
+                                _log(f"{site_name}: fallback成功，使用URL: {try_url}")
+                            break
+                        else:
+                            status = resp.status_code if resp else "无响应"
+                            _log_warn(f"{site_name}: URL请求失败(状态码:{status}): {try_url}")
+                    except Exception as e:
+                        _log_warn(f"{site_name}: URL请求异常: {try_url}, 错误: {e}")
 
                 # 第2步：检测CF挑战，降级FlareSolverr
                 if page_source and under_challenge(page_source) and self._auto_cf >= 1:
