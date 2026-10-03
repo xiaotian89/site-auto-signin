@@ -1,15 +1,16 @@
 {
-  "ProSignin": {
+  "prosignin": {
     "name": "站点自动签到Pro",
     "description": "自动签到MP里所有已添加站点，FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。",
     "labels": "工具,签到",
-    "version": "2.0.1",
+    "version": "2.0.2",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
     "system_version": ">=3.0.0",
     "history": {
-      "v2.0.1": "修复package.v3.json的key为驼峰类名ProSignin，解决配置加载失败404"
+      "v2.0.1": "修复package.v3.json的key为驼峰类名ProSignin，解决配置加载失败404",
+      "v2.0.2": "统一PluginId为全小写prosignin，修复在线市场安装失败PluginIdentity不一致"
     }
   }
 }

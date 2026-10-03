@@ -29,7 +29,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "自动签到MP里所有已添加站点，FlareSolverr+Playwright自动过CF滑块，随机错峰，微信通知。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "2.0.0"
+    plugin_version = "2.0.2"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
