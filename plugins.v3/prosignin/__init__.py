@@ -25,13 +25,24 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 
+
+def _log(msg):
+    """带插件前缀的日志输出"""
+    logger.info(f"[ProSignin] {msg}")
+
+def _log_warn(msg):
+    logger.warning(f"[ProSignin] {msg}")
+
+def _log_error(msg):
+    logger.error(f"[ProSignin] {msg}")
+
 class ProSignin(_PluginBase):
     """站点自动签到Pro。"""
 
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.0.4"
+    plugin_version = "3.0.5"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -127,7 +138,7 @@ class ProSignin(_PluginBase):
                     "kwargs": {}
                 }]
             except Exception as e:
-                logger.error(f"定时任务错误: {e}")
+                _log_error(f"定时任务错误: {e}")
         return []
 
     def get_form(self) -> tuple:
@@ -314,7 +325,7 @@ class ProSignin(_PluginBase):
         for attempt in range(max_retries + 1):
             try:
                 if attempt > 0:
-                    logger.info(f"{site.name}: 第{attempt}次重试")
+                    _log(f"{site.name}: 第{attempt}次重试")
                     _time.sleep(3)
 
                 site_name = site.name
@@ -332,11 +343,11 @@ class ProSignin(_PluginBase):
                     if resp and resp.status_code == 200:
                         page_source = resp.text
                 except Exception as e:
-                    logger.warning(f"普通请求失败: {e}")
+                    _log_warn(f"{site_name}: 普通请求失败: {e}")
 
                 # 第2步：检测CF挑战，降级FlareSolverr
                 if page_source and under_challenge(page_source) and self._auto_cf >= 1:
-                    logger.info(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
+                    _log(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
                     page_source = None
                     try:
                         payload = {
@@ -351,11 +362,11 @@ class ProSignin(_PluginBase):
                             if data.get("status") == "ok":
                                 page_source = data.get("solution", {}).get("response", "")
                     except Exception as e:
-                        logger.warning(f"FlareSolverr失败: {e}")
+                        _log_warn(f"{site_name}: FlareSolverr失败: {e}")
 
                 # 第3步：仍有CF挑战，降级Playwright
                 if page_source and under_challenge(page_source) and self._auto_cf >= 2:
-                    logger.info(f"{site_name}: FlareSolverr未过CF，降级Playwright")
+                    _log(f"{site_name}: FlareSolverr未过CF，降级Playwright")
                     page_source = None
                     try:
                         page_source = PlaywrightHelper().get_page_source(
@@ -365,7 +376,7 @@ class ProSignin(_PluginBase):
                             timeout=20
                         )
                     except Exception as e:
-                        logger.warning(f"Playwright失败: {e}")
+                        _log_warn(f"{site_name}: Playwright失败: {e}")
 
                 if not page_source:
                     result = f"❌ {site_name}: 请求失败"
@@ -381,12 +392,12 @@ class ProSignin(_PluginBase):
                 # 重试判断：如果结果包含重试关键词，且不是最后一次尝试
                 if attempt < max_retries and retry_keywords:
                     if any(kw in result for kw in retry_keywords):
-                        logger.info(f"{site_name}: 结果命中重试关键词，准备重试")
+                        _log(f"{site_name}: 结果命中重试关键词，准备重试")
                         continue
                 return result
 
             except Exception as e:
-                logger.error(f"{site.name}: 异常 {e}")
+                _log_error(f"{site.name}: 异常 {e}")
                 if attempt < max_retries:
                     continue
                 return f"❌ {site.name}: 异常 {str(e)[:50]}"
@@ -411,9 +422,9 @@ class ProSignin(_PluginBase):
                             cleaned.append(f)
                     except Exception:
                         pass
-            logger.info(f"清理本插件缓存完成，清理{len(cleaned)}个文件")
+            _log(f"清理本插件缓存完成，清理{len(cleaned)}个文件")
         except Exception as e:
-            logger.warning(f"清理缓存失败: {e}")
+            _log_warn(f"清理缓存失败: {e}")
         return cleaned
 
     def __load_history(self):
@@ -423,7 +434,7 @@ class ProSignin(_PluginBase):
                 with open(self._history_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
         except Exception as e:
-            logger.warning(f"加载签到历史失败: {e}")
+            _log_warn(f"加载签到历史失败: {e}")
         return {"history": {}}
 
     def __save_history(self, history):
@@ -436,7 +447,7 @@ class ProSignin(_PluginBase):
             with open(self._history_file, 'w', encoding='utf-8') as f:
                 json.dump(history, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.warning(f"保存签到历史失败: {e}")
+            _log_warn(f"保存签到历史失败: {e}")
 
     def __record_results(self, results):
         """记录本次签到结果到历史"""
@@ -484,7 +495,7 @@ class ProSignin(_PluginBase):
         """签到主入口：支持并发队列、失败重试、缓存清理"""
         sites = SiteOper().list_order_by_pri()
         if not sites:
-            logger.info("没有站点")
+            _log("没有配置站点，跳过签到")
             return
 
         # 清理本日缓存（如果开启）
@@ -499,7 +510,7 @@ class ProSignin(_PluginBase):
         else:
             sign_sites = [s for s in sites if s.id in selected_ids]
 
-        logger.info(f"开始签到，共{len(sign_sites)}个站点，并发数={self._queue_cnt}")
+        _log(f"开始签到，共{len(sign_sites)}个站点，并发数={self._queue_cnt}")
         results = []
 
         # 并发签到
@@ -511,7 +522,7 @@ class ProSignin(_PluginBase):
                     result = future.result()
                     results.append(result)
                 except Exception as e:
-                    logger.error(f"{site.name}: 并发异常 {e}")
+                    _log_error(f"{site.name}: 并发异常 {e}")
                     results.append(f"❌ {site.name}: 异常 {str(e)[:50]}")
 
         # 按站点名称排序输出
@@ -520,11 +531,19 @@ class ProSignin(_PluginBase):
         # 记录到历史
         self.__record_results(results)
 
+        # 输出汇总
+        success_cnt = sum(1 for r in results if r.startswith("✅"))
+        failed_cnt = sum(1 for r in results if r.startswith("❌"))
+        warning_cnt = sum(1 for r in results if r.startswith("⚠️"))
+        _log(f"签到完成：成功{success_cnt}个，失败{failed_cnt}个，异常{warning_cnt}个")
+        for r in results:
+            _log(r)
+
         if self._notify:
             notify_text = "站点签到结果：\n" + "\n".join(results)
-            logger.info(notify_text)
+            _log("签到结果通知已发送")
             try:
                 from app.core.notify import post_message
                 post_message(channel=NotificationType.Wechat, title="站点自动签到Pro", text=notify_text)
             except Exception as e:
-                logger.warning(f"通知发送失败: {e}")
+                _log_warn(f"通知发送失败: {e}")
