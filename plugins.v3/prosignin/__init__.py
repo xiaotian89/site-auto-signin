@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.1.0"
+    plugin_version = "3.1.1"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -228,11 +228,11 @@ class ProSignin(_PluginBase):
 
         # 构建表头
         header_cells = [
-            {'component': 'th', 'props': {'text': '站点'}},
-            {'component': 'th', 'props': {'text': '今日状态'}},
+            {'component': 'th', 'text': '站点'},
+            {'component': 'th', 'text': '今日状态'},
         ]
         for d in display_dates:
-            header_cells.append({'component': 'th', 'props': {'class': 'prosignin-dot-cell', 'text': d[5:]}})
+            header_cells.append({'component': 'th', 'props': {'class': 'prosignin-dot-cell'}, 'text': d[5:]})
 
         # 构建表格行
         body_rows = []
@@ -252,10 +252,10 @@ class ProSignin(_PluginBase):
                     sc = "prosignin-dot--none"; si = "-"; st = "未记录"
 
                 row_cells = [
-                    {'component': 'td', 'content': [{'component': 'div', 'props': {'class': 'prosignin-site-name', 'text': site}}]},
+                    {'component': 'td', 'content': [{'component': 'div', 'props': {'class': 'prosignin-site-name'}, 'text': site}]},
                     {'component': 'td', 'props': {'class': 'prosignin-status-cell'}, 'content': [
-                        {'component': 'span', 'props': {'class': 'prosignin-dot ' + sc, 'style': 'margin-right:6px;', 'text': si}},
-                        {'component': 'span', 'props': {'text': st}},
+                        {'component': 'span', 'props': {'class': 'prosignin-dot ' + sc, 'style': 'margin-right:6px;'}, 'text': si},
+                        {'component': 'span', 'text': st},
                     ]},
                 ]
 
@@ -272,13 +272,13 @@ class ProSignin(_PluginBase):
                     else:
                         dc = "prosignin-dot--none"; di = "-"
                     row_cells.append({'component': 'td', 'props': {'class': 'prosignin-dot-cell'}, 'content': [
-                        {'component': 'span', 'props': {'class': 'prosignin-dot ' + dc, 'text': di}},
+                        {'component': 'span', 'props': {'class': 'prosignin-dot ' + dc}, 'text': di},
                     ]})
 
                 body_rows.append({'component': 'tr', 'content': row_cells})
         else:
             body_rows.append({'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'colspan': '9', 'style': 'text-align:center;padding:24px;color:rgba(var(--v-theme-on-surface),.56);', 'text': '暂无签到记录，请先运行一次签到'}},
+                {'component': 'td', 'props': {'colspan': '9', 'style': 'text-align:center;padding:24px;color:rgba(var(--v-theme-on-surface),.56);'}, 'text': '暂无签到记录，请先运行一次签到'},
             ]})
 
         page = [
@@ -286,26 +286,26 @@ class ProSignin(_PluginBase):
             {'component': 'div', 'props': {'class': 'prosignin-page'}, 'content': [
                 {'component': 'div', 'props': {'class': 'prosignin-summary'}, 'content': [
                     {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '📊 今日签到'}},
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(success) + '/' + str(total)}},
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__meta', 'text': '失败' + str(failed) + ' · 异常' + str(warning)}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head'}, 'text': '📊 今日签到'},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value'}, 'text': str(success) + '/' + str(total)},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__meta'}, 'text': '失败' + str(failed) + ' · 异常' + str(warning)},
                     ]},
                     {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '✅ 签到成功'}},
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(success)}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head'}, 'text': '✅ 签到成功'},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value'}, 'text': str(success)},
                     ]},
                     {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '❌ 签到失败'}},
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(failed)}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head'}, 'text': '❌ 签到失败'},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value'}, 'text': str(failed)},
                     ]},
                     {'component': 'div', 'props': {'class': 'prosignin-stat'}, 'content': [
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__head', 'text': '📅 历史记录'}},
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__value', 'text': str(history_days) + '天'}},
-                        {'component': 'div', 'props': {'class': 'prosignin-stat__meta', 'text': '最近7天详情见下表'}},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__head'}, 'text': '📅 历史记录'},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__value'}, 'text': str(history_days) + '天'},
+                        {'component': 'div', 'props': {'class': 'prosignin-stat__meta'}, 'text': '最近7天详情见下表'},
                     ]},
                 ]},
                 {'component': 'div', 'props': {}, 'content': [
-                    {'component': 'div', 'props': {'class': 'prosignin-section-title', 'text': '签到状态（最近7天）'}},
+                    {'component': 'div', 'props': {'class': 'prosignin-section-title'}, 'text': '签到状态（最近7天）'},
                     {'component': 'div', 'props': {'class': 'prosignin-table-wrap'}, 'content': [
                         {'component': 'table', 'props': {'class': 'prosignin-table'}, 'content': [
                             {'component': 'thead', 'content': [{'component': 'tr', 'content': header_cells}]},
@@ -313,7 +313,7 @@ class ProSignin(_PluginBase):
                         ]}
                     ]},
                 ]},
-                {'component': 'div', 'props': {'style': 'color:rgba(var(--v-theme-on-surface),.5);font-size:.72rem;margin-top:4px;', 'text': '站点自动签到Pro v3.0.2 · 并发队列+失败重试+智能降级 · 历史记录保存在 /config/prosignin_history.json，保留最近30天'}},
+                {'component': 'div', 'props': {'style': 'color:rgba(var(--v-theme-on-surface),.5);font-size:.72rem;margin-top:4px;'}, 'text': '站点自动签到Pro v3.1.1 · 并发队列+失败重试+智能降级 · 历史记录保存在 /config/prosignin_history.json，保留最近30天'},
             ]}
         ]
         return page
