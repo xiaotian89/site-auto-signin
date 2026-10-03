@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.1.2"
+    plugin_version = "3.1.3"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -336,7 +336,12 @@ class ProSignin(_PluginBase):
                 if not site_cookie:
                     return f"❌ {site_name}: 无Cookie"
 
-                sign_url = f"{site_url.rstrip('/')}/attendance.php"
+                # 52pt 等站点用自定义签到URL
+                site_url_lower = site_url.lower()
+                if '52pt' in site_url_lower or '52pt' in site_name.lower():
+                    sign_url = f"{site_url.rstrip('/')}/52bakatestdate0823.php"
+                else:
+                    sign_url = f"{site_url.rstrip('/')}/attendance.php"
                 page_source = None
 
                 # 第1步：普通请求（最快）
@@ -417,8 +422,10 @@ class ProSignin(_PluginBase):
                     result = f"⚠️ {site_name}: CF挑战"
                 elif not SiteUtils.is_logged_in(page_source):
                     result = f"❌ {site_name}: Cookie失效"
-                elif "签到成功" in page_source or "已签到" in page_source or SiteUtils.is_checkin(page_source):
+                elif "签到成功" in page_source or "已签到" in page_source or "签到完成" in page_source or "魔力值" in page_source or SiteUtils.is_checkin(page_source):
                     result = f"✅ {site_name}: 签到成功"
+                elif "请先完成滑块" in page_source or "拖动滑块" in page_source:
+                    result = f"❌ {site_name}: 滑块验证未通过"
                 else:
                     result = f"✅ {site_name}: 请求已发送"
 
@@ -544,14 +551,20 @@ class ProSignin(_PluginBase):
             
             _log(f"{site_name}: 滑块拖动完成")
             
-            # 6. 52pt 专门处理：拖动后点击提交签到按钮
+            # 6. 52pt 专门处理：拖动后点击提交签到按钮，并等待页面刷新
             if '52pt' in site_name.lower() or '52pt' in page.url:
                 _t.sleep(0.5)
                 submit_btn = page.query_selector('#submit-btn')
                 if submit_btn and submit_btn.is_enabled():
                     _log(f"{site_name}: 点击提交签到按钮")
                     submit_btn.click()
-                    _t.sleep(1)
+                    # 等待页面刷新或跳转
+                    try:
+                        page.wait_for_load_state(timeout=5000)
+                    except Exception:
+                        pass
+                    _t.sleep(1.5)
+                    _log(f"{site_name}: 签到提交完成，当前URL: {page.url}")
                 else:
                     _log_warn(f"{site_name}: 提交按钮未启用，可能滑块验证未通过")
             
