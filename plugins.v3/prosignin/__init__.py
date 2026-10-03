@@ -16,7 +16,7 @@ from app.helper.browser import PlaywrightHelper
 from app.helper.cloudflare import under_challenge
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas.types import EventType, NotificationType
+from app.schemas.types import EventType, NotificationChannel, NotificationType
 from app.utils.http import RequestUtils
 from app.utils.site import SiteUtils
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -42,7 +42,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.0.6"
+    plugin_version = "3.0.7"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -551,9 +551,12 @@ class ProSignin(_PluginBase):
 
         if self._notify:
             notify_text = "站点签到结果：\n" + "\n".join(results)
-            _log("签到结果通知已发送")
             try:
-                from app.core.notify import post_message
-                post_message(channel=NotificationType.Wechat, title="站点自动签到Pro", text=notify_text)
+                self.post_message(
+                    channel=NotificationChannel.WechatClawBot,
+                    title="站点自动签到Pro",
+                    text=notify_text,
+                )
+                _log("签到结果通知已发送")
             except Exception as e:
                 _log_warn(f"通知发送失败: {e}")
