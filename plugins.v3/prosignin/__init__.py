@@ -43,7 +43,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.0.8"
+    plugin_version = "3.0.9"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -378,6 +378,37 @@ class ProSignin(_PluginBase):
                         )
                     except Exception as e:
                         _log_warn(f"{site_name}: Playwright失败: {e}")
+
+                # 第3.5步：检测站点自有滑块验证码，自动拖动
+                if page_source and not under_challenge(page_source):
+                    # 检查页面是否包含滑块关键词
+                    slider_keywords = ['滑块', '滑动验证', '拖动验证', 'slider', 'captcha', 'geetest', 'nc_iconfont']
+                    has_slider = any(kw.lower() in page_source.lower() for kw in slider_keywords)
+                    if has_slider and self._auto_cf >= 1:
+                        _log(f"{site_name}: 检测到站点滑块验证码，尝试自动拖动")
+                        try:
+                            from playwright.sync_api import sync_playwright
+                            with sync_playwright() as p:
+                                browser = p.chromium.launch(headless=True)
+                                context = browser.new_context(
+                                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                    viewport={"width": 1280, "height": 800}
+                                )
+                                # 设置cookie
+                                if site_cookie:
+                                    cookie_list = []
+                                    for k, v in site_cookie.items():
+                                        cookie_list.append({"name": k, "value": str(v), "domain": page.url.split('/')[2] if 'page' in dir() else ""})
+                                page = context.new_page()
+                                page.goto(sign_url, timeout=20000, wait_until="domcontentloaded")
+                                page.wait_for_timeout(2000)
+                                # 处理滑块
+                                self.__handle_site_slider(page, site_name)
+                                page.wait_for_timeout(2000)
+                                page_source = page.content()
+                                browser.close()
+                        except Exception as e:
+                            _log_warn(f"{site_name}: 滑块自动处理失败: {e}")
 
                 if not page_source:
                     result = f"❌ {site_name}: 请求失败"
