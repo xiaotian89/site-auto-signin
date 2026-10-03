@@ -3,7 +3,7 @@
     "name": "站点自动签到Pro",
     "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
     "labels": "工具,签到",
-    "version": "3.3.6",
+    "version": "3.3.7",
     "icon": "https://img.icons8.com/fluency/96/calendar.png",
     "author": "xiaotian",
     "level": 2,
@@ -47,7 +47,8 @@
       "v3.3.3": "修复肉丝API地址(/api/points/attendance)+PT时间签到URL(attendance.php?type=list)",
       "v3.3.4": "重写52PT滑块处理逻辑-专门针对52PT优化拖动+修复滑块检测触发条件",
       "v3.3.5": "52PT滑块改用JS直接验证(设置位置+触发mouse事件)-已实测可行+自动提交签到",
-      "v3.3.6": "修复站点render(浏览器仿真)配置未生效问题+检测到403/雷池自动降级Playwright"
+      "v3.3.6": "修复站点render(浏览器仿真)配置未生效问题+检测到403/雷池自动降级Playwright",
+      "v3.3.7": "修复猪猪雷池验证等待(二次获取页面)+检测403状态码自动降级+cookie失效检测优化增加更多登录态关键词"
     }
   }
 }

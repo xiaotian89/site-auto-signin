@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.6"
+    plugin_version = "3.3.7"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -372,6 +372,7 @@ class ProSignin(_PluginBase):
                     f"{site_url.rstrip('/')}/dailycheckin.php",
                     f"{site_url.rstrip('/')}/index.php?action=sign",
                 ]
+                has_403_status = False
                 for try_url in fallback_urls:
                     try:
                         resp = RequestUtils(cookies=site_cookie, timeout=15).get_res(url=try_url)
@@ -386,6 +387,8 @@ class ProSignin(_PluginBase):
                             break
                         else:
                             status = resp.status_code if resp else "无响应"
+                            if resp and resp.status_code == 403:
+                                has_403_status = True
                             _log_warn(f"{site_name}: URL请求失败(状态码:{status}): {try_url}")
                     except Exception as e:
                         _log_warn(f"{site_name}: URL请求异常: {try_url}, 错误: {e}")
@@ -402,10 +405,11 @@ class ProSignin(_PluginBase):
                         _log(f"{site_name}: 检测到403/雷池/安全验证页面，准备降级浏览器仿真")
                 
                 # 第1.5步：如果站点开启了浏览器仿真(render=True)，或者检测到403/雷池，直接用Playwright
-                if site_render or has_403_block:
-                    _log(f"{site_name}: 站点render={site_render}, 403拦截={has_403_block}，使用Playwright浏览器仿真")
+                if site_render or has_403_block or has_403_status:
+                    _log(f"{site_name}: 站点render={site_render}, 403拦截={has_403_block}, 403状态码={has_403_status}，使用Playwright浏览器仿真")
                     page_source = None
                     try:
+                        # 第一次获取页面
                         page_source = PlaywrightHelper().get_page_source(
                             url=sign_url,
                             cookies=site_cookie,
@@ -413,7 +417,23 @@ class ProSignin(_PluginBase):
                             timeout=30
                         )
                         if page_source:
-                            _log(f"{site_name}: Playwright获取页面成功，长度={len(page_source)}")
+                            _log(f"{site_name}: Playwright第一次获取页面成功，长度={len(page_source)}")
+                            # 检查是否还是雷池/安全验证页面
+                            is_still_block = any(kw in page_source for kw in ['雷池', '安全验证', '正在验证', '访问被拒绝', '请求被拦截'])
+                            if is_still_block:
+                                _log(f"{site_name}: 页面仍是验证页面，等待5秒后重新获取...")
+                                import time as _t
+                                _t.sleep(5)
+                                # 第二次获取页面（等待JS验证完成）
+                                page_source2 = PlaywrightHelper().get_page_source(
+                                    url=sign_url,
+                                    cookies=site_cookie,
+                                    ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                    timeout=30
+                                )
+                                if page_source2 and len(page_source2) > len(page_source):
+                                    page_source = page_source2
+                                    _log(f"{site_name}: Playwright第二次获取页面成功，长度={len(page_source)}")
                     except Exception as e:
                         _log_warn(f"{site_name}: Playwright失败: {e}")
 
@@ -498,7 +518,7 @@ class ProSignin(_PluginBase):
                 elif "雷池" in page_source or "安全验证" in page_source or "正在验证" in page_source or "请稍候" in page_source:
                     # 雷池安全验证页面，需要浏览器渲染等待
                     result = f"⚠️ {site_name}: 雷池验证(请在站点管理开启浏览器仿真)"
-                elif not SiteUtils.is_logged_in(page_source):
+                elif not self.__check_logged_in(page_source, site_name):
                     result = f"❌ {site_name}: Cookie失效"
                 elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source or "已簽到" in page_source or "今日已簽到" in page_source or "已經簽到" in page_source or "請勿重複簽到" in page_source:
                     result = f"✅ {site_name}: 已签到"
@@ -731,6 +751,32 @@ class ProSignin(_PluginBase):
             return f"❌ {site_name}: 释放技能异常: {str(e)[:50]}"
 
     @staticmethod
+    def __check_logged_in(self, page_source, site_name=""):
+        """检测页面是否已登录，增加更多登录态关键词，减少误判"""
+        if not page_source:
+            return False
+        # 先用MP内置的检测
+        try:
+            if SiteUtils.is_logged_in(page_source):
+                return True
+        except:
+            pass
+        # 增加更多登录态关键词（PT站点常见的登录后标识）
+        login_keywords = [
+            '退出', '登出', 'logout', 'usercp', '用户中心', '个人中心',
+            '我的收藏', 'mybonus', '魔力值', '上传量', '下载量',
+            '分享率', 'ratio', '邀请', 'invite', '消息', 'message',
+            '通知', 'notification', '设置', 'settings', 'profile',
+            '签到', 'attendance', 'checkin', 'signin',
+            '欢迎回来', 'welcome', '你好', 'hello',
+            '等级', 'level', 'vip', '会员', 'member',
+        ]
+        hit_count = sum(1 for kw in login_keywords if kw.lower() in page_source.lower())
+        if hit_count >= 2:
+            _log(f"{site_name}: 自定义登录态检测命中{hit_count}个关键词，判定为已登录")
+            return True
+        return False
+
     def __is_cf_page(page_source):
         """更全面的CF挑战页面检测，避免误判为站点自有滑块"""
         if not page_source:
