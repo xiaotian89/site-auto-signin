@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.2.7"
+    plugin_version = "3.2.8"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -386,6 +386,9 @@ class ProSignin(_PluginBase):
                     except Exception as e:
                         _log_warn(f"{site_name}: URL请求异常: {try_url}, 错误: {e}")
 
+                # 检查是否所有URL都失败了
+                all_urls_failed = not page_source or len(page_source) < 50
+                
                 # 第2步：检测CF挑战，降级FlareSolverr
                 if page_source and under_challenge(page_source) and self._auto_cf >= 1:
                     _log(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
@@ -455,6 +458,9 @@ class ProSignin(_PluginBase):
                         except Exception as e:
                             _log_warn(f"{site_name}: 滑块自动处理失败: {e}")
 
+                # 检查是否是404页面（签到页面不存在）
+                elif page_source and ("File not found" in page_source or "404 Not Found" in page_source) and len(page_source) < 500:
+                    result = f"❌ {site_name}: 无签到功能(签到页面不存在)"
                 if not page_source:
                     _log_warn(f"{site_name}: 请求失败，page_source为空，URL: {sign_url}")
                     result = f"❌ {site_name}: 请求失败"
@@ -472,12 +478,12 @@ class ProSignin(_PluginBase):
                     if any(kw in page_source for kw in ['签到', '签退', '打卡', '奖励', '获得', '增加', '魔力+']):
                         result = f"✅ {site_name}: 签到成功"
                     else:
-                        result = f"⚠️ {site_name}: 状态未知(页面含魔力值但无签到提示)"
+                        result = f"⚠️ {site_name}: 登录成功，签到未确认"
                 elif "请先完成滑块" in page_source or "拖动滑块" in page_source or "滑块验证" in page_source or "验证码错误" in page_source or "验证失败" in page_source or "签到失败" in page_source or "操作失败" in page_source:
                     result = f"❌ {site_name}: 签到失败"
                 else:
                     # 兜底：请求已发送但未匹配到明确成功/失败关键词，结果未知
-                    result = f"⚠️ {site_name}: 请求已发送(结果未知，请手动确认)"
+                    result = f"⚠️ {site_name}: 登录成功，签到未确认"
 
                 # 重试判断：如果结果包含重试关键词，且不是最后一次尝试
                 if attempt < max_retries and retry_keywords:
