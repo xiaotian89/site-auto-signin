@@ -372,7 +372,6 @@ class ProSignin(_PluginBase):
                     f"{site_url.rstrip('/')}/dailycheckin.php",
                     f"{site_url.rstrip('/')}/index.php?action=sign",
                 ]
-                has_403_status = False
                 for try_url in fallback_urls:
                     try:
                         resp = RequestUtils(cookies=site_cookie, timeout=15).get_res(url=try_url)
@@ -387,8 +386,6 @@ class ProSignin(_PluginBase):
                             break
                         else:
                             status = resp.status_code if resp else "无响应"
-                            if resp and resp.status_code == 403:
-                                has_403_status = True
                             _log_warn(f"{site_name}: URL请求失败(状态码:{status}): {try_url}")
                     except Exception as e:
                         _log_warn(f"{site_name}: URL请求异常: {try_url}, 错误: {e}")
@@ -405,11 +402,10 @@ class ProSignin(_PluginBase):
                         _log(f"{site_name}: 检测到403/雷池/安全验证页面，准备降级浏览器仿真")
                 
                 # 第1.5步：如果站点开启了浏览器仿真(render=True)，或者检测到403/雷池，直接用Playwright
-                if site_render or has_403_block or has_403_status:
-                    _log(f"{site_name}: 站点render={site_render}, 403拦截={has_403_block}, 403状态码={has_403_status}，使用Playwright浏览器仿真")
+                if site_render or has_403_block:
+                    _log(f"{site_name}: 站点render={site_render}, 403拦截={has_403_block}，使用Playwright浏览器仿真")
                     page_source = None
                     try:
-                        # 第一次获取页面
                         page_source = PlaywrightHelper().get_page_source(
                             url=sign_url,
                             cookies=site_cookie,
@@ -417,23 +413,7 @@ class ProSignin(_PluginBase):
                             timeout=30
                         )
                         if page_source:
-                            _log(f"{site_name}: Playwright第一次获取页面成功，长度={len(page_source)}")
-                            # 检查是否还是雷池/安全验证页面
-                            is_still_block = any(kw in page_source for kw in ['雷池', '安全验证', '正在验证', '访问被拒绝', '请求被拦截'])
-                            if is_still_block:
-                                _log(f"{site_name}: 页面仍是验证页面，等待5秒后重新获取...")
-                                import time as _t
-                                _t.sleep(5)
-                                # 第二次获取页面（等待JS验证完成）
-                                page_source2 = PlaywrightHelper().get_page_source(
-                                    url=sign_url,
-                                    cookies=site_cookie,
-                                    ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                                    timeout=30
-                                )
-                                if page_source2 and len(page_source2) > len(page_source):
-                                    page_source = page_source2
-                                    _log(f"{site_name}: Playwright第二次获取页面成功，长度={len(page_source)}")
+                            _log(f"{site_name}: Playwright获取页面成功，长度={len(page_source)}")
                     except Exception as e:
                         _log_warn(f"{site_name}: Playwright失败: {e}")
 
@@ -572,34 +552,26 @@ class ProSignin(_PluginBase):
                 "Accept": "application/json, text/plain, */*",
                 "Authorization": str(token).strip()
             }
-            # 始终使用代理（从环境变量或settings获取）
-            from app.core.config import settings
-            proxies = settings.PROXY if hasattr(settings, 'PROXY') and settings.PROXY else None
-            if not proxies:
-                import os as _os
-                http_proxy = _os.environ.get('HTTPS_PROXY') or _os.environ.get('https_proxy') or _os.environ.get('HTTP_PROXY') or _os.environ.get('http_proxy')
-                if http_proxy:
-                    proxies = {'http': http_proxy, 'https': http_proxy}
-            _log(f"{site_name}: 使用代理: {proxies is not None}")
+            # 始终使用代理（从环境变量获取）
+            import os as _os_m
+            _http_proxy = _os_m.environ.get('HTTPS_PROXY') or _os_m.environ.get('https_proxy') or _os_m.environ.get('HTTP_PROXY') or _os_m.environ.get('http_proxy')
+            proxies = {'http': _http_proxy, 'https': _http_proxy} if _http_proxy else None
             
             res = RequestUtils(headers=headers, timeout=timeout, proxies=proxies,
-                               referer=f"{site_url}index").post_res(
+                               referer=f"{site_url}index", allow_redirects=True).post_res(
                 url=f"https://api.{domain}/api/member/updateLastBrowse")
             
             if res and res.status_code in (200, 301, 302):
-                _log(f"{site_name}: API响应状态码={res.status_code}")
                 try:
                     payload = res.json()
                     if isinstance(payload, dict) and str(payload.get("code")) == "0":
                         return f"✅ {site_name}: 保号成功(更新访问时间)"
                 except Exception:
                     pass
-                # 302重定向也认为成功（API可能返回重定向表示成功）
                 if res.status_code in (301, 302):
                     return f"✅ {site_name}: 保号成功(重定向)"
                 return f"✅ {site_name}: 保号成功"
             elif res:
-                _log_warn(f"{site_name}: API响应状态码={res.status_code}, 响应内容={(res.text or '')[:200]}")
                 return f"❌ {site_name}: 保号失败(状态码:{res.status_code})"
             else:
                 return f"❌ {site_name}: 保号失败(无法连接)"
@@ -625,14 +597,9 @@ class ProSignin(_PluginBase):
             }
             body = {"mode": "fixed"}
             # 始终使用代理
-            from app.core.config import settings
-            proxies = settings.PROXY if hasattr(settings, 'PROXY') and settings.PROXY else None
-            if not proxies:
-                import os as _os
-                http_proxy = _os.environ.get('HTTPS_PROXY') or _os.environ.get('https_proxy') or _os.environ.get('HTTP_PROXY') or _os.environ.get('http_proxy')
-                if http_proxy:
-                    proxies = {'http': http_proxy, 'https': http_proxy}
-            _log(f"{site_name}: 使用代理: {proxies is not None}")
+            import os as _os_r
+            _http_proxy = _os_r.environ.get('HTTPS_PROXY') or _os_r.environ.get('https_proxy') or _os_r.environ.get('HTTP_PROXY') or _os_r.environ.get('http_proxy')
+            proxies = {'http': _http_proxy, 'https': _http_proxy} if _http_proxy else None
             
             api_url = f"{site_url.rstrip('/')}/api/points/attendance"
             res = None
@@ -696,7 +663,6 @@ class ProSignin(_PluginBase):
             elif res and res.status_code in (401, 403):
                 return f"❌ {site_name}: API Key已失效或权限不足"
             elif res:
-                _log_warn(f"{site_name}: API响应状态码={res.status_code}, 响应内容={(res.text or '')[:200]}")
                 return f"❌ {site_name}: 签到失败(状态码:{res.status_code})"
             else:
                 return f"❌ {site_name}: 签到失败(无法连接)"
@@ -767,33 +733,7 @@ class ProSignin(_PluginBase):
             return f"❌ {site_name}: 释放技能异常: {str(e)[:50]}"
 
     @staticmethod
-    def __check_logged_in(self, page_source, site_name=""):
-        """检测页面是否已登录，增加更多登录态关键词，减少误判"""
-        if not page_source:
-            return False
-        # 先用MP内置的检测
-        try:
-            if SiteUtils.is_logged_in(page_source):
-                return True
-        except:
-            pass
-        # 增加更多登录态关键词（PT站点常见的登录后标识）
-        login_keywords = [
-            '退出', '登出', 'logout', 'usercp', '用户中心', '个人中心',
-            '我的收藏', 'mybonus', '魔力值', '上传量', '下载量',
-            '分享率', 'ratio', '邀请', 'invite', '消息', 'message',
-            '通知', 'notification', '设置', 'settings', 'profile',
-            '签到', 'attendance', 'checkin', 'signin',
-            '欢迎回来', 'welcome', '你好', 'hello',
-            '等级', 'level', 'vip', '会员', 'member',
-        ]
-        hit_count = sum(1 for kw in login_keywords if kw.lower() in page_source.lower())
-        if hit_count >= 2:
-            _log(f"{site_name}: 自定义登录态检测命中{hit_count}个关键词，判定为已登录")
-            return True
-        return False
-
-    def __is_cf_page(self, page_source):
+    def __is_cf_page(page_source):
         """更全面的CF挑战页面检测，避免误判为站点自有滑块"""
         if not page_source:
             return False
