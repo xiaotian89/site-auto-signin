@@ -518,7 +518,7 @@ class ProSignin(_PluginBase):
                 elif "雷池" in page_source or "安全验证" in page_source or "正在验证" in page_source or "请稍候" in page_source:
                     # 雷池安全验证页面，需要浏览器渲染等待
                     result = f"⚠️ {site_name}: 雷池验证(请在站点管理开启浏览器仿真)"
-                elif not self.__check_logged_in(page_source, site_name):
+                elif not SiteUtils.is_logged_in(page_source):
                     result = f"❌ {site_name}: Cookie失效"
                 elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source or "已簽到" in page_source or "今日已簽到" in page_source or "已經簽到" in page_source or "請勿重複簽到" in page_source:
                     result = f"✅ {site_name}: 已签到"
