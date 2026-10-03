@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.3.5"
+    plugin_version = "3.3.6"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -348,6 +348,8 @@ class ProSignin(_PluginBase):
                     return api_result
                 
                 site_cookie = site.cookie
+                # 读取站点的浏览器仿真(render)配置
+                site_render = getattr(site, 'render', False) or False
                 if not site_cookie:
                     return f"❌ {site_name}: 无Cookie"
 
@@ -391,6 +393,30 @@ class ProSignin(_PluginBase):
                 # 检查是否所有URL都失败了
                 all_urls_failed = not page_source or len(page_source) < 50
                 
+                # 检查页面是否包含403/雷池/安全验证关键词
+                has_403_block = False
+                if page_source:
+                    block_keywords = ['403', 'Forbidden', '雷池', '安全验证', '正在验证', '访问被拒绝', '请求被拦截', 'WAF', 'Web Application Firewall']
+                    has_403_block = any(kw.lower() in page_source.lower() for kw in block_keywords)
+                    if has_403_block:
+                        _log(f"{site_name}: 检测到403/雷池/安全验证页面，准备降级浏览器仿真")
+                
+                # 第1.5步：如果站点开启了浏览器仿真(render=True)，或者检测到403/雷池，直接用Playwright
+                if site_render or has_403_block:
+                    _log(f"{site_name}: 站点render={site_render}, 403拦截={has_403_block}，使用Playwright浏览器仿真")
+                    page_source = None
+                    try:
+                        page_source = PlaywrightHelper().get_page_source(
+                            url=sign_url,
+                            cookies=site_cookie,
+                            ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            timeout=30
+                        )
+                        if page_source:
+                            _log(f"{site_name}: Playwright获取页面成功，长度={len(page_source)}")
+                    except Exception as e:
+                        _log_warn(f"{site_name}: Playwright失败: {e}")
+
                 # 第2步：检测CF挑战，降级FlareSolverr
                 if page_source and under_challenge(page_source) and self._auto_cf >= 1:
                     _log(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
