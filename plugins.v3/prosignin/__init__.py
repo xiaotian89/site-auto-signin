@@ -1102,3 +1102,512 @@ class ProSignin(_PluginBase):
 
             # 检查是否已签到（页面显示"已签到"）
             if '已签到' in html and 'a#signed' not in html:
+                return f"✅ {site_name}: 已签到"
+
+            # 提取 timestamp 和 token
+            ts_match = _re.search(r'signed_timestamp\s*:\s*["\'](\d+)["\']', html)
+            token_match = _re.search(r'signed_token\s*:\s*["\']([a-f0-9]+)["\']', html)
+
+            if not ts_match or not token_match:
+                # 可能已经签到了，检查页面内容
+                if '已签到' in html:
+                    return f"✅ {site_name}: 已签到"
+                return f"❌ {site_name}: 未找到签到参数(timestamp/token)"
+
+            signed_ts = ts_match.group(1)
+            signed_token = token_match.group(1)
+
+            # 第2步：POST签到
+            sign_url = f"{site_url.rstrip('/')}/signed.php"
+            post_headers = {
+                **base_headers,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": page_url,
+            }
+            post_data = {
+                "signed_timestamp": signed_ts,
+                "signed_token": signed_token,
+            }
+
+            sign_res = _requests_lib.post(sign_url, headers=post_headers, data=post_data,
+                                           timeout=timeout, verify=False)
+
+            if sign_res.status_code == 200:
+                result_text = sign_res.content.decode('utf-8', errors='replace').strip()
+                # 签到成功的返回通常包含"成功"、"签到"、魔力值等，或者空字符串
+                if any(kw in result_text for kw in ['成功', '签到', '魔力', 'bonus', '已签']) or not result_text:
+                    return f"✅ {site_name}: 签到成功"
+                elif '已签' in result_text or '重复' in result_text:
+                    return f"✅ {site_name}: 已签到"
+                else:
+                    # 返回内容可能是提示信息，也算成功（因为状态码200）
+                    return f"✅ {site_name}: 签到成功({result_text[:30]})"
+            elif sign_res.status_code in (301, 302):
+                return f"✅ {site_name}: 签到成功(重定向)"
+            else:
+                return f"❌ {site_name}: 签到失败(状态码:{sign_res.status_code})"
+        except Exception as e:
+            return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
+
+    @staticmethod
+    def __is_cf_page(page_source):
+        """更全面的CF挑战页面检测，避免误判为站点自有滑块"""
+        if not page_source:
+            return False
+        page_lower = page_source.lower()
+        # CF 特有关键词（标题、正文、JS变量）
+        cf_keywords = [
+            'just a moment', '请稍候', 'checking your browser',
+            'cloudflare', 'ray id', 'ray_id', 'cf-challenge',
+            'cf-please-wait', 'challenge-spinner', 'attack-box',
+            'attention required', 'security check', 'verify you are human',
+            'trk_jschal', 'jschl_vc', 'jschl_answer',
+            'ddos-guard', 'ddos protection',
+            'captcha-bypass', 'cf-turnstile',
+        ]
+        for kw in cf_keywords:
+            if kw in page_lower:
+                return True
+        return False
+
+    def __handle_site_slider(self, sign_url, site_name, site_cookie):
+        """处理站点自有滑块验证码，用MP内置PlaywrightHelper"""
+        import time as _t
+        import random as _r
+        
+        def slider_callback(page):
+            """滑块拖动回调函数"""
+            _t.sleep(1.5)
+            
+            # 52PT专门处理
+            is_52pt = '52pt' in site_name.lower() or '52pt' in sign_url.lower()
+            # 农场专门处理（滑块元素ID: dragHandler）
+            is_farm = '0ff' in site_url_lower or '农场' in site_name
+            
+            if is_52pt:
+                return self.__handle_52pt_slider(page, site_name)
+            
+            if is_farm:
+                return self.__handle_farm_slider(page, site_name)
+            
+            # 通用滑块处理
+            slider_selectors = [
+                '#slider-btn', '#slider', '.slider-btn', '.slide-btn',
+                '.drag-btn', '.nc_iconfont.btn_slide', '.geetest_slider_button',
+                '[class*="slider"]', '[class*="slide"]', '[class*="drag"]',
+            ]
+            
+            slider_btn = None
+            for selector in slider_selectors:
+                try:
+                    elements = page.query_selector_all(selector)
+                    if elements:
+                        for el in elements:
+                            if el.is_visible() and el.is_enabled():
+                                slider_btn = el
+                                break
+                        if slider_btn:
+                            break
+                except Exception:
+                    continue
+            
+            if not slider_btn:
+                _log_warn(f"{site_name}: 未找到滑块按钮元素")
+                return page.content()
+            
+            try:
+                btn_box = slider_btn.bounding_box()
+                if not btn_box:
+                    return page.content()
+                
+                container_width = btn_box['width'] * 5
+                for container_sel in ['#slider-container', '.slider-container', '[class*="slider-container"]']:
+                    container = page.query_selector(container_sel)
+                    if container:
+                        c_box = container.bounding_box()
+                        if c_box:
+                            container_width = c_box['width']
+                            break
+                
+                start_x = btn_box['x'] + btn_box['width'] / 2
+                start_y = btn_box['y'] + btn_box['height'] / 2
+                target_x = btn_box['x'] + container_width - btn_box['width'] - 5
+                target_y = start_y + _r.uniform(-2, 2)
+                
+                mouse = page.mouse
+                mouse.move(start_x, start_y)
+                _t.sleep(_r.uniform(0.1, 0.3))
+                mouse.down()
+                _t.sleep(_r.uniform(0.1, 0.2))
+                
+                steps = _r.randint(15, 25)
+                for i in range(1, steps + 1):
+                    progress = i / steps
+                    eased_progress = 1 - (1 - progress) ** 2
+                    current_x = start_x + (target_x - start_x) * eased_progress
+                    current_y = start_y + _r.uniform(-3, 3)
+                    mouse.move(current_x, current_y)
+                    if i > steps * 0.7:
+                        _t.sleep(_r.uniform(0.02, 0.08))
+                    else:
+                        _t.sleep(_r.uniform(0.01, 0.03))
+                
+                mouse.move(target_x, target_y)
+                _t.sleep(_r.uniform(0.1, 0.3))
+                mouse.up()
+                _t.sleep(_r.uniform(0.5, 1.0))
+                
+                return page.content()
+            except Exception as e:
+                _log_warn(f"{site_name}: 滑块拖动异常: {e}")
+                return page.content()
+        
+        # 用 PlaywrightHelper.action() 执行滑块操作
+        try:
+            result = PlaywrightHelper().action(
+                url=sign_url,
+                callback=slider_callback,
+                cookies=site_cookie,
+                ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                headless=True,
+                timeout=45
+            )
+            return result
+        except Exception as e:
+            _log_warn(f"{site_name}: PlaywrightHelper滑块处理失败: {e}")
+            return None
+    
+    def __handle_52pt_slider(self, page, site_name):
+        """52PT专门滑块处理：先从主页点击签到赚魔力进入（有Referer检测），再用JS设置滑块位置+提交"""
+        import time as _t
+        
+        try:
+            # 检查当前页面是否显示"暂停使用"（直接访问签到页面会触发Referer检测）
+            page_content = page.content()
+            if '暂停使用' in page_content or '签到页面已暂停' in page_content:
+                _log(f"{site_name}: 检测到Referer拦截，先从主页进入...")
+                # 先访问主页
+                page.goto('https://52pt.site/index.php', wait_until='networkidle', timeout=15000)
+                _t.sleep(1)
+                # 点击"签到赚魔力"链接
+                try:
+                    sign_link = page.query_selector('a#game')
+                    if sign_link:
+                        sign_link.click()
+                        _t.sleep(2)
+                        page.wait_for_load_state('networkidle', timeout=10000)
+                        _log(f"{site_name}: 已从主页点击签到赚魔力进入签到页面")
+                    else:
+                        # 找不到链接，直接导航到签到页面（带上Referer）
+                        page.goto('https://52pt.site/52bakatestdate0823.php', wait_until='networkidle', timeout=15000)
+                except Exception as e:
+                    _log_warn(f"{site_name}: 点击签到赚魔力失败，直接导航: {e}")
+                    page.goto('https://52pt.site/52bakatestdate0823.php', wait_until='networkidle', timeout=15000)
+                _t.sleep(1)
+            
+            # 等待滑块加载
+            page.wait_for_selector('#slider-btn', timeout=10000)
+            _t.sleep(0.5)
+            
+            # 用JS直接完成滑块验证（52PT没有轨迹检测，已验证可行）
+            js_slider_code = """
+            (function() {
+                var slider = document.getElementById('slider-btn');
+                var bg = document.getElementById('slider-bg');
+                var container = document.getElementById('slider-container');
+                var submitBtn = document.getElementById('submit-btn');
+                
+                if (!slider || !container) {
+                    return 'slider elements not found';
+                }
+                
+                // 如果已经完成，直接返回
+                if (submitBtn && !submitBtn.disabled) {
+                    return 'already completed';
+                }
+                
+                var maxLeft = container.offsetWidth - 54;
+                var btnRect = slider.getBoundingClientRect();
+                var containerRect = container.getBoundingClientRect();
+                
+                // 1. 触发mousedown事件
+                var mouseDownEvent = new MouseEvent('mousedown', {
+                    bubbles: true, cancelable: true,
+                    clientX: btnRect.left + 25, clientY: btnRect.top + 18
+                });
+                slider.dispatchEvent(mouseDownEvent);
+                
+                // 2. 设置滑块位置（拖到最右边）
+                slider.style.left = maxLeft + 'px';
+                bg.style.width = (maxLeft + 25) + 'px';
+                
+                // 3. 触发mousemove事件
+                var mouseMoveEvent = new MouseEvent('mousemove', {
+                    bubbles: true, cancelable: true,
+                    clientX: containerRect.left + maxLeft + 25, clientY: btnRect.top + 18
+                });
+                document.dispatchEvent(mouseMoveEvent);
+                
+                // 4. 触发mouseup事件
+                var mouseUpEvent = new MouseEvent('mouseup', {
+                    bubbles: true, cancelable: true,
+                    clientX: containerRect.left + maxLeft + 25, clientY: btnRect.top + 18
+                });
+                document.dispatchEvent(mouseUpEvent);
+                
+                return 'slider completed: maxLeft=' + maxLeft;
+            })();
+            """
+            
+            result = page.evaluate(js_slider_code)
+            _log(f"{site_name}: 52PT JS滑块验证结果: {result}")
+            _t.sleep(1.0)  # 等待JS验证完成
+            
+            # 检查提交按钮是否启用
+            submit_btn = page.query_selector('#submit-btn')
+            if submit_btn:
+                is_enabled = submit_btn.is_enabled()
+                btn_text = submit_btn.inner_text() if hasattr(submit_btn, 'inner_text') else ''
+                _log(f"{site_name}: 52PT提交按钮状态: enabled={is_enabled}, text={btn_text}")
+                
+                if is_enabled:
+                    _log(f"{site_name}: 52PT点击提交签到按钮")
+                    submit_btn.click()
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=8000)
+                    except Exception:
+                        pass
+                    _t.sleep(2)
+                    return page.content()
+                else:
+                    _log_warn(f"{site_name}: 52PT提交按钮未启用，JS验证可能未生效")
+            else:
+                _log_warn(f"{site_name}: 52PT未找到提交按钮")
+            
+            return page.content()
+        except Exception as e:
+            _log_warn(f"{site_name}: 52PT滑块处理异常: {e}")
+            return page.content()
+
+    def __handle_farm_slider(self, page, site_name):
+        """农场滑块专门处理：用真实鼠标拖动完成验证（农场有轨迹检测，JS直接设置位置不生效）"""
+        import time as _t
+        
+        try:
+            # 等待滑块加载
+            page.wait_for_selector('#dragHandler', timeout=10000)
+            _t.sleep(0.5)
+            
+            # 获取滑块和容器的位置
+            handler = page.query_selector('#dragHandler')
+            container = page.query_selector('#dragContainer')
+            
+            if not handler or not container:
+                _log_warn(f"{site_name}: 农场滑块元素未找到")
+                return page.content()
+            
+            handler_box = handler.bounding_box()
+            container_box = container.bounding_box()
+            
+            if not handler_box or not container_box:
+                _log_warn(f"{site_name}: 农场滑块位置获取失败")
+                return page.content()
+            
+            # 计算起始和目标位置
+            start_x = handler_box['x'] + handler_box['width'] / 2
+            start_y = handler_box['y'] + handler_box['height'] / 2
+            # 目标位置：容器最右边，留半个滑块宽度
+            end_x = container_box['x'] + container_box['width'] - handler_box['width'] / 2
+            end_y = start_y
+            
+            _log(f"{site_name}: 农场滑块拖动: ({start_x:.0f},{start_y:.0f}) -> ({end_x:.0f},{end_y:.0f})")
+            
+            # 用真实鼠标拖动（分多段，模拟人类行为，避免轨迹检测）
+            mouse = page.mouse
+            mouse.move(start_x, start_y)
+            _t.sleep(0.1)
+            mouse.down()
+            _t.sleep(0.1)
+            
+            # 分多段移动，每段随机延迟
+            steps = 20
+            for i in range(1, steps + 1):
+                cur_x = start_x + (end_x - start_x) * i / steps
+                # Y轴随机小幅度抖动
+                cur_y = start_y + (_t.random() - 0.5) * 4 if hasattr(_t, 'random') else start_y
+                mouse.move(cur_x, cur_y)
+                _t.sleep(0.02 + _t.random() * 0.03 if hasattr(_t, 'random') else 0.03)
+            
+            mouse.move(end_x, end_y)
+            _t.sleep(0.1)
+            mouse.up()
+            
+            _log(f"{site_name}: 农场滑块拖动完成，等待验证结果...")
+            _t.sleep(3)  # 等待验证完成和页面跳转
+            
+            # 检查是否跳转成功
+            current_url = page.url
+            _log(f"{site_name}: 农场滑块验证后URL: {current_url}")
+            
+            return page.content()
+        except Exception as e:
+            _log_warn(f"{site_name}: 农场滑块处理异常: {e}")
+            return page.content()
+
+    def __clean_cache(self):
+        """清理本插件本日缓存：仅清理prosignin自己的临时文件，不碰MP全局或其他插件"""
+        cleaned = []
+        try:
+            import glob
+            # 只清理本插件前缀的临时文件，绝对安全
+            cache_patterns = [
+                "/tmp/prosignin_*",
+                "/tmp/pro_signin_*",
+            ]
+            for pattern in cache_patterns:
+                for f in glob.glob(pattern):
+                    try:
+                        if os.path.isfile(f):
+                            os.remove(f)
+                            cleaned.append(f)
+                    except Exception:
+                        pass
+            _log(f"清理本插件缓存完成，清理{len(cleaned)}个文件")
+        except Exception as e:
+            _log_warn(f"清理缓存失败: {e}")
+        return cleaned
+
+    def __load_history(self):
+        """加载签到历史记录"""
+        try:
+            if os.path.exists(self._history_file):
+                with open(self._history_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            _log_warn(f"加载签到历史失败: {e}")
+        return {"history": {}}
+
+    def __save_history(self, history):
+        """保存签到历史记录，只保留最近30天"""
+        try:
+            # 只保留最近30天
+            if "history" in history:
+                cutoff = (datetime.now() - _td(days=30)).strftime("%Y-%m-%d")
+                history["history"] = {k: v for k, v in history["history"].items() if isinstance(k, str) and k >= cutoff}
+            with open(self._history_file, 'w', encoding='utf-8') as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            _log_warn(f"保存签到历史失败: {e}")
+
+    def __record_results(self, results):
+        """记录本次签到结果到历史"""
+        history = self.__load_history()
+        today = datetime.now().strftime("%Y-%m-%d")
+        if "history" not in history:
+            history["history"] = {}
+        history["history"][today] = {}
+        recorded = 0
+        for result in results:
+            # 解析结果格式: ✅ 站点名: 原因 或 ❌ 站点名: 原因（支持中英文冒号）
+            if not result or len(result) < 2:
+                continue
+            status_icon = result[0]
+            rest = result[1:].strip()
+            # 同时支持英文冒号:和中文冒号：
+            if "：" in rest:
+                site_name, message = rest.split("：", 1)
+            elif ":" in rest:
+                site_name, message = rest.split(":", 1)
+            else:
+                site_name = rest
+                message = ""
+            site_name = site_name.strip()
+            message = message.strip()
+            if not site_name:
+                continue
+            status = "success" if status_icon == "✅" else ("warning" if status_icon == "⚠️" else "failed")
+            history["history"][today][site_name] = {
+                "status": status,
+                "message": message
+            }
+            recorded += 1
+        _log(f"记录历史：今天共{recorded}个站点结果")
+        self.__save_history(history)
+        _log(f"历史记录已保存到 {self._history_file}")
+
+    def stop_service(self):
+        self._enabled = False
+        try:
+            if self._scheduler:
+                self._scheduler.shutdown(wait=False)
+                self._scheduler = None
+        except Exception:
+            pass
+
+    @eventmanager.register(EventType.PluginAction)
+    def _on_plugin_action(self, event: Event):
+        event_data = getattr(event, "event_data", None) or {}
+        if event_data.get("action") != "pro_signin":
+            return
+        self.sign_in()
+
+    def sign_in(self):
+        """签到主入口：支持并发队列、失败重试、缓存清理"""
+        sites = SiteOper().list_order_by_pri()
+        if not sites:
+            _log("没有配置站点，跳过签到")
+            return
+
+        # 清理本日缓存（如果开启）
+        if self._clean:
+            self.__clean_cache()
+            self._clean = False
+            self.__update_config()
+
+        selected_ids = set(self._sign_sites or [])
+        if not selected_ids or "all" in selected_ids:
+            sign_sites = sites
+        else:
+            sign_sites = [s for s in sites if s.id in selected_ids]
+
+        _log(f"开始签到，共{len(sign_sites)}个站点，并发数={self._queue_cnt}")
+        results = []
+
+        # 并发签到
+        with ThreadPoolExecutor(max_workers=max(1, min(self._queue_cnt, 10))) as executor:
+            future_map = {executor.submit(self.__sign_one_site, site): site for site in sign_sites}
+            for future in as_completed(future_map):
+                site = future_map[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    _log_error(f"{site.name}: 并发异常 {e}")
+                    results.append(f"❌ {site.name}: 异常 {str(e)[:50]}")
+
+        # 按站点名称排序输出
+        results.sort()
+
+        # 记录到历史
+        self.__record_results(results)
+
+        # 输出汇总
+        success_cnt = sum(1 for r in results if r.startswith("✅"))
+        failed_cnt = sum(1 for r in results if r.startswith("❌"))
+        warning_cnt = sum(1 for r in results if r.startswith("⚠️"))
+        _log(f"签到完成：成功{success_cnt}个，失败{failed_cnt}个，异常{warning_cnt}个")
+        for r in results:
+            _log(r)
+
+        if self._notify:
+            notify_text = "站点签到结果：\n" + "\n".join(results)
+            try:
+                self.post_message(
+                    mtype=NotificationType.SiteMessage,
+                    title="站点自动签到Pro",
+                    text=notify_text,
+                )
+                _log("签到结果通知已发送")
+            except Exception as e:
+                _log_warn(f"通知发送失败: {e}")
