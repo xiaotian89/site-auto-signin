@@ -715,3 +715,390 @@ class ProSignin(_PluginBase):
                 if page_source and under_challenge(page_source) and self._auto_cf >= 1:
                     _log(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
                     page_source = None
+                    try:
+                        payload = {
+                            "cmd": "request.get",
+                            "url": sign_url,
+                            "maxTimeout": 60000,
+                            "headers": {"Cookie": site_cookie}
+                        }
+                        resp = RequestUtils(timeout=70).post_res(url=self._flaresolverr_url, json=payload)
+                        if resp and resp.status_code == 200:
+                            data = resp.json()
+                            if data.get("status") == "ok":
+                                page_source = data.get("solution", {}).get("response", "")
+                    except Exception as e:
+                        _log_warn(f"{site_name}: FlareSolverr失败: {e}")
+
+                # 第3步：仍有CF挑战，降级Playwright
+                if page_source and under_challenge(page_source) and self._auto_cf >= 2:
+                    _log(f"{site_name}: FlareSolverr未过CF，降级Playwright")
+                    page_source = None
+                    try:
+                        page_source = PlaywrightHelper().get_page_source(
+                            url=sign_url,
+                            cookies=site_cookie,
+                            ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            timeout=20
+                        )
+                    except Exception as e:
+                        _log_warn(f"{site_name}: Playwright失败: {e}")
+
+                # 第3.5步：检测站点自有滑块验证码，自动拖动
+                # 先严格排除CF挑战页面，避免CF五秒盾被误判为滑块
+                is_cf = under_challenge(page_source) if page_source else False
+                if not is_cf and page_source:
+                    is_cf = self.__is_cf_page(page_source)
+                
+                if page_source and not is_cf:
+                    # 检查页面是否包含滑块关键词（52PT的"请先完成滑块"也能匹配，农场的"拖动滑块验证"也能匹配）
+                    slider_keywords = ['滑块', '滑动验证', '拖动验证', 'slider-btn', 'slider_container', 'geetest', 'nc_iconfont', '拖动滑块', 'slide-to-verify', '请先完成滑块', '滑动认证']
+                    has_slider = any(kw.lower() in page_source.lower() for kw in slider_keywords)
+                    # 52PT、农场等站点只要检测到滑块就处理，不强制要求_auto_cf>=1
+                    if has_slider and (self._auto_cf >= 1 or '52pt' in site_name.lower() or '52pt' in site_url_lower or '0ff' in site_url_lower or '农场' in site_name):
+                        _log(f"{site_name}: 检测到站点自有滑块验证码，尝试自动拖动")
+                        try:
+                            slider_result = self.__handle_site_slider(sign_url, site_name, site_cookie)
+                            if slider_result:
+                                page_source = slider_result
+                                _log(f"{site_name}: 滑块处理完成，页面长度={len(page_source)}")
+                            else:
+                                _log_warn(f"{site_name}: 滑块处理返回空结果")
+                        except Exception as e:
+                            _log_warn(f"{site_name}: 滑块自动处理失败: {e}")
+
+                # 检查是否是404页面（签到页面不存在）
+                elif page_source and ("File not found" in page_source or "404 Not Found" in page_source) and len(page_source) < 500:
+                    result = f"❌ {site_name}: 无签到功能(签到页面不存在)"
+                if not page_source:
+                    _log_warn(f"{site_name}: 请求失败，page_source为空，URL: {sign_url}")
+                    result = f"❌ {site_name}: 请求失败"
+                elif under_challenge(page_source):
+                    result = f"⚠️ {site_name}: CF挑战(请开启浏览器仿真)"
+                elif "Attention Required" in page_source or "cf-error" in page_source or "you have been blocked" in page_source.lower() or "cloudflare" in page_source.lower()[:500]:
+                    # Cloudflare拦截页面（IP被封或WAF拦截，非标准5秒盾）
+                    if site_render:
+                        result = f"⚠️ {site_name}: CF拦截(浏览器仿真已开启但IP被封，请浏览器手动过验证后更新Cookie)"
+                    else:
+                        result = f"⚠️ {site_name}: CF拦截(请开启浏览器仿真或更新Cookie)"
+                elif "二级密码" in page_source or "二级验证" in page_source or "请输入二级密码" in page_source or "安全密码" in page_source or "交易密码" in page_source:
+                    # 二级密码验证页面（如猪猪等站点，需要手动输入二级密码，无法自动签到）
+                    result = f"⚠️ {site_name}: 需要二级密码验证(无法自动签到，请浏览器手动签到)"
+                elif "已签到" in page_source or "今日已签到" in page_source or "已经签到" in page_source or "请勿重复签到" in page_source or "今天已签" in page_source or "您今天已经签到" in page_source or "已簽到" in page_source or "今日已簽到" in page_source or "已經簽到" in page_source or "請勿重複簽到" in page_source:
+                    # 已签到（优先于验证码判断，手动签到后页面可能同时包含验证码和已签到）
+                    # 高清视界特殊处理：页面同时包含红色"[签到]"和绿色"[已签到]"，通过display:none切换
+                    # 只有绿色的"[已签到]"（<font color="green">[已签到]</font>）才表示真正已签到
+                    if "hdarea" in site_url_lower or "高清视界" in site_name:
+                        if 'color="green">[已签到]' in page_source or "color='green'>[已签到]" in page_source:
+                            result = f"✅ {site_name}: 已签到"
+                        else:
+                            # 红色"[签到]"可见，说明还没签到，需要点击签到按钮
+                            result = f"⚠️ {site_name}: 需要点击签到按钮(页面显示签到按钮，未自动签到)"
+                    else:
+                        result = f"✅ {site_name}: 已签到"
+                elif not SiteUtils.is_logged_in(page_source):
+                    # Cookie失效（优先于图形验证码判断，登录页面通常包含"验证码"关键词，避免误判）
+                    result = f"❌ {site_name}: Cookie失效"
+                elif "请耐心等待" in page_source or "验证通过后将自动完成签到" in page_source or "签到验证程序加载" in page_source or "Just a moment" in page_source or "Checking your browser" in page_source or "cf-challenge" in page_source.lower() or "under_challenge" in page_source.lower():
+                    # CF5秒盾页面（我堡、观众等站点），需要浏览器仿真等待验证通过
+                    if site_render:
+                        result = f"⚠️ {site_name}: CF5秒盾验证中(浏览器仿真已开启，等待超时)"
+                    else:
+                        result = f"⚠️ {site_name}: CF5秒盾验证(请在站点管理开启浏览器仿真)"
+                elif any(kw in site_name or kw in site_url_lower for kw in ['hdsky', '天空', '皇后', 'queen']) and ("验证码" in page_source or "captcha" in page_source.lower() or "verification code" in page_source.lower() or "verifycode" in page_source.lower() or "请输入验证码" in page_source or "图形验证码" in page_source or "字符验证码" in page_source):
+                    # 图形验证码页面（仅对天空、皇后等已知需要图形验证码的站点判断，避免其他站点误判）
+                    result = f"⚠️ {site_name}: 需要输入图形验证码(无法自动签到，请浏览器手动签到)"
+                elif "雷池" in page_source or "安全验证" in page_source or "正在验证" in page_source or "请稍候" in page_source:
+                    # 雷池安全验证页面，需要浏览器渲染等待
+                    if site_render:
+                        result = f"⚠️ {site_name}: 雷池验证中(浏览器仿真已开启，等待超时)"
+                    else:
+                        result = f"⚠️ {site_name}: 雷池验证(请在站点管理开启浏览器仿真)"
+                elif not SiteUtils.is_logged_in(page_source):
+                    result = f"❌ {site_name}: Cookie失效"
+                elif "springsunday" in site_url_lower or "春天" in site_name or "keepfrds" in site_url_lower or "朋友" in site_name:
+                    # 春天/朋友站点：无签到按钮，登录成功即保号
+                    if page_source and SiteUtils.is_logged_in(page_source):
+                        result = f"✅ {site_name}: 无签到按钮(登录保号)"
+                    else:
+                        result = f"❌ {site_name}: 无法登录，无法保号"
+                elif ("hdarea" in site_url_lower or "高清视界" in site_name) and '<font color="red">[签到]</font>' in page_source:
+                    # 高清视界：页面同时包含红色[签到]按钮和绿色[已签到]文字，通过JS切换显示
+                    # 用requests获取页面不会执行JS，无法判断哪个显示；只要有红色[签到]按钮就说明需要点击
+                    result = f"⚠️ {site_name}: 需要点击签到按钮(无法自动签到，请浏览器手动签到)"
+                elif ("btschool" in site_url_lower or "学校" in site_name) and ("每日签到" in page_source or "action=addbonus" in page_source):
+                    # 学校：页面有"每日签到"按钮，需要点击才能签到
+                    result = f"⚠️ {site_name}: 需要点击签到按钮(无法自动签到，请浏览器手动签到)"
+                elif "签到成功" in page_source or "签到完成" in page_source or "成功签到" in page_source or "签到奖励" in page_source or "获得魔力" in page_source or "魔力+" in page_source or "打卡成功" in page_source or "今日签到" in page_source or "签到已完成" in page_source or "簽到成功" in page_source or "簽到完成" in page_source or "簽到獎勵" in page_source or "獲得魔力" in page_source or "签到已得" in page_source or "簽到已得" in page_source or "查看签到记录" in page_source or "查看簽到記錄" in page_source or SiteUtils.is_checkin(page_source):
+                    result = f"✅ {site_name}: 签到成功"
+                else:
+                    # 兜底：请求已发送但未匹配到明确成功/失败关键词，结果未知
+                    result = f"⚠️ {site_name}: 登录成功，签到未确认"
+
+                # 重试判断：如果结果包含重试关键词，且不是最后一次尝试
+                if attempt < max_retries and retry_keywords:
+                    if any(kw in result for kw in retry_keywords):
+                        _log(f"{site_name}: 结果命中重试关键词，准备重试")
+                        continue
+                return result
+
+            except Exception as e:
+                _log_error(f"{site.name}: 异常 {e}")
+                if attempt < max_retries:
+                    continue
+                return f"❌ {site.name}: 异常 {str(e)[:50]}"
+
+        return f"❌ {site.name}: 重试次数耗尽"
+
+
+    def __signin_mteam(self, site, site_name, site_url):
+        """馒头(m-team) API签到：更新最后访问时间保号，实际没有签到按钮"""
+        try:
+            token = getattr(site, "token", "") or getattr(site, "apikey", "") or ""
+            ua = getattr(site, "ua", "") or "Mozilla/5.0"
+            timeout = getattr(site, "timeout", 30) or 30
+            proxy = getattr(site, "proxy", None)
+
+            # 构建代理配置（容器默认代理 http://192.168.2.70:7892）
+            import os as _os
+            proxies = None
+            if proxy:
+                proxy_url = _os.environ.get('HTTP_PROXY') or _os.environ.get('HTTPS_PROXY') or 'http://192.168.2.70:7892'
+                proxies = {'http': proxy_url, 'https': proxy_url}
+
+            from urllib.parse import urlparse
+            domain = urlparse(site_url).netloc
+            if domain.startswith("www."):
+                domain = domain[4:]
+            # 馒头API地址特殊处理：kp.m-team.cc的API是api.m-team.cc，不是api.kp.m-team.cc
+            if 'm-team.cc' in domain:
+                api_domain = 'api.m-team.cc'
+            else:
+                api_domain = f'api.{domain}'
+
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": ua,
+                "Accept": "application/json, text/plain, */*",
+                "Authorization": str(token).strip()
+            }
+
+            import requests as _requests_lib
+            res = _requests_lib.post(
+                url=f"https://{api_domain}/api/member/updateLastBrowse",
+                headers=headers, timeout=timeout, verify=False, proxies=proxies)
+            
+            if res and res.status_code in (200, 301, 302):
+                try:
+                    payload = res.json()
+                    if isinstance(payload, dict) and str(payload.get("code")) == "0":
+                        return f"✅ {site_name}: 保号成功(更新访问时间)"
+                except Exception:
+                    pass
+                if res.status_code in (301, 302):
+                    return f"✅ {site_name}: 保号成功(重定向)"
+                return f"✅ {site_name}: 保号成功"
+            elif res:
+                return f"❌ {site_name}: 保号失败(状态码:{res.status_code})"
+            else:
+                return f"❌ {site_name}: 保号失败(无法连接)"
+        except Exception as e:
+            return f"❌ {site_name}: 保号异常: {str(e)[:50]}"
+
+    def __signin_rousi(self, site, site_name, site_url):
+        """肉丝(rousi.pro) PeerGo系统 API Key签到，参考MP内置实现"""
+        try:
+            apikey = str(getattr(site, "apikey", "") or "").strip()
+            token = str(getattr(site, "token", "") or "").strip()
+            ua = getattr(site, "ua", "") or "Mozilla/5.0"
+            timeout = getattr(site, "timeout", 30) or 30
+            proxy = getattr(site, "proxy", None)
+
+            # 构建代理配置
+            import os as _os
+            proxies = None
+            if proxy:
+                proxy_url = _os.environ.get('HTTP_PROXY') or _os.environ.get('HTTPS_PROXY') or 'http://192.168.2.70:7892'
+                proxies = {'http': proxy_url, 'https': proxy_url}
+
+            if not apikey and not token:
+                return f"❌ {site_name}: 缺少API Key"
+
+            base_headers = {
+                "Content-Type": "application/json",
+                "User-Agent": ua,
+                "Accept": "application/json, text/plain, */*"
+            }
+            body = {"mode": "fixed"}
+
+            api_url = f"{site_url.rstrip('/')}/api/points/attendance"
+            res = None
+
+            # 优先用 api-token header（个人API Key）
+            if apikey:
+                import requests as _requests_lib
+                res = _requests_lib.post(
+                    url=api_url,
+                    headers={**base_headers, "api-token": apikey},
+                    json=body, timeout=timeout, verify=False, proxies=proxies)
+                
+                # 检查是否成功
+                if res and res.status_code == 200:
+                    try:
+                        payload = res.json() or {}
+                        if payload.get("code") == 0:
+                            return f"✅ {site_name}: 签到成功"
+                    except Exception:
+                        pass
+                # 检查是否已签到
+                if res and res.status_code == 400:
+                    try:
+                        payload = res.json() or {}
+                        code = payload.get("code")
+                        msg = payload.get("message") or payload.get("msg") or ""
+                        if code == 1 and ("已签到" in msg or "重复" in msg or "already" in str(msg).lower()):
+                            return f"✅ {site_name}: 已签到"
+                    except Exception:
+                        pass
+                # api-token失败，回退Authorization
+                if token:
+                    res = None
+            
+            # 回退用 Authorization: Bearer
+            if token and res is None:
+                auth_value = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+                import requests as _requests_lib
+                res = _requests_lib.post(
+                    url=api_url,
+                    headers={**base_headers, "Authorization": auth_value},
+                    json=body, timeout=timeout, verify=False, proxies=proxies)
+            
+            # 最终判定
+            if res and res.status_code == 200:
+                try:
+                    payload = res.json() or {}
+                    if payload.get("code") == 0:
+                        return f"✅ {site_name}: 签到成功"
+                except Exception:
+                    pass
+                return f"✅ {site_name}: 签到成功"
+            elif res and res.status_code == 400:
+                try:
+                    payload = res.json() or {}
+                    code = payload.get("code")
+                    msg = payload.get("message") or payload.get("msg") or ""
+                    if code == 1 and ("已签到" in msg or "重复" in msg or "already" in str(msg).lower()):
+                        return f"✅ {site_name}: 已签到"
+                except Exception:
+                    pass
+                return f"❌ {site_name}: 签到失败(状态码:400)"
+            elif res and res.status_code in (401, 403):
+                return f"❌ {site_name}: API Key已失效或权限不足"
+            elif res:
+                return f"❌ {site_name}: 签到失败(状态码:{res.status_code})"
+            else:
+                return f"❌ {site_name}: 签到失败(无法连接)"
+        except Exception as e:
+            return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
+
+    def __signin_zhuque(self, site, site_name, site_url):
+        """朱雀(zhuque.in) 释放技能游戏化签到（需要cookie）"""
+        try:
+            site_cookie = getattr(site, "cookie", "") or ""
+            if not site_cookie:
+                return f"❌ {site_name}: 无Cookie"
+            ua = getattr(site, "ua", "") or "Mozilla/5.0"
+            timeout = getattr(site, "timeout", 30) or 30
+            
+            # 1. 获取页面，提取 x-csrf-token
+            import requests as _requests_lib
+            _get_headers = {
+                "User-Agent": ua,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Cookie": site_cookie,
+            }
+            page_res = _requests_lib.get(url="https://zhuque.in",
+                headers=_get_headers, timeout=timeout, verify=False)
+            if not page_res or page_res.status_code != 200:
+                return f"❌ {site_name}: 无法连接"
+            
+            html_text = page_res.content.decode('utf-8', errors='replace')
+            if "login.php" in html_text:
+                return f"❌ {site_name}: Cookie失效"
+            
+            # 提取 x-csrf-token
+            import re
+            csrf_match = re.search(r'name="x-csrf-token"\s+content="([^"]+)"', html_text)
+            if not csrf_match:
+                csrf_match = re.search(r'<meta[^>]+x-csrf-token[^>]+content="([^"]+)"', html_text)
+            if not csrf_match:
+                return f"❌ {site_name}: 未找到csrf-token"
+            
+            csrf_token = csrf_match.group(1)
+            
+            # 2. 释放技能
+            headers = {
+                "x-csrf-token": str(csrf_token),
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": ua
+            }
+            skill_headers = {
+                "x-csrf-token": str(csrf_token),
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": ua,
+                "Cookie": site_cookie,
+            }
+            data = {"all": 1, "resetModal": "true"}
+            
+            import requests as _requests_lib
+            skill_res = _requests_lib.post(
+                url="https://zhuque.in/api/gaming/fireGenshinCharacterMagic",
+                headers=skill_headers, json=data, timeout=timeout, verify=False)
+            
+            if skill_res and skill_res.status_code == 200:
+                try:
+                    skill_dict = skill_res.json()
+                    if skill_dict.get('status') == 200:
+                        bonus = skill_dict.get('data', {}).get('bonus', 0)
+                        return f"✅ {site_name}: 释放技能成功(+{bonus}魔力)"
+                except Exception:
+                    pass
+                return f"✅ {site_name}: 释放技能成功"
+            elif skill_res:
+                return f"❌ {site_name}: 释放技能失败(状态码:{skill_res.status_code})"
+            else:
+                return f"❌ {site_name}: 释放技能失败(无法连接)"
+        except Exception as e:
+            return f"❌ {site_name}: 释放技能异常: {str(e)[:50]}"
+
+    def __signin_ttg(self, site, site_name, site_url):
+        """听听歌(totheglory.im) AJAX签到：先GET页面提取timestamp和token，再POST signed.php"""
+        try:
+            import re as _re
+            import requests as _requests_lib
+            import warnings as _warnings
+            _warnings.filterwarnings('ignore')
+
+            site_cookie = getattr(site, "cookie", "") or ""
+            if not site_cookie:
+                return f"❌ {site_name}: 无Cookie"
+            ua = getattr(site, "ua", "") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            timeout = getattr(site, "timeout", 30) or 30
+
+            base_headers = {
+                "User-Agent": ua,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Cookie": site_cookie,
+            }
+
+            # 第1步：GET签到页面，提取 signed_timestamp 和 signed_token
+            page_url = f"{site_url.rstrip('/')}/plugin.php?id=sign"
+            page_res = _requests_lib.get(page_url, headers=base_headers, timeout=timeout, verify=False)
+            if page_res.status_code != 200:
+                return f"❌ {site_name}: 获取签到页面失败(状态码:{page_res.status_code})"
+
+            html = page_res.content.decode('utf-8', errors='replace')
+
+            # 检查是否已签到（页面显示"已签到"）
+            if '已签到' in html and 'a#signed' not in html:
