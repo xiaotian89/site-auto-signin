@@ -378,3 +378,340 @@ class ProSignin(_PluginBase):
         for attempt in range(max_retries + 1):
             try:
                 if attempt > 0:
+                    _log(f"{site.name}: 第{attempt}次重试")
+                    _time.sleep(3)
+
+                site_name = site.name
+                site_url = site.url
+                # API签到站点特殊处理（馒头、肉丝、朱雀）
+                site_url_lower = site_url.lower()
+                site_name_lower = site_name.lower()
+                if "m-team" in site_url_lower or "mteam" in site_url_lower or "馒头" in site_name or "m-team" in site_name_lower:
+                    api_result = self.__signin_mteam(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                elif "rousi" in site_url_lower or "肉丝" in site_name or "rousi" in site_name_lower:
+                    api_result = self.__signin_rousi(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                elif "zhuque" in site_url_lower or "朱雀" in site_name or "zhuque" in site_name_lower:
+                    api_result = self.__signin_zhuque(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                elif "totheglory" in site_url_lower or "听听歌" in site_name or "ttg" in site_name_lower:
+                    api_result = self.__signin_ttg(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                
+                site_cookie = site.cookie
+                # 读取站点的浏览器仿真(render)配置
+                site_render = getattr(site, 'render', False) or False
+                if not site_cookie:
+                    return f"❌ {site_name}: 无Cookie"
+
+                # 使用硬编码的签到URL映射（避免每次试探，减少Cookie过期风险）
+                sign_path = 'attendance.php'  # 默认
+                for key, path in self._SIGN_URL_MAP.items():
+                    if key in site_url_lower:
+                        sign_path = path
+                        break
+                sign_url = f"{site_url.rstrip('/')}/{sign_path}"
+                page_source = None
+
+                # 构建代理配置（站点开启proxy时使用容器代理）
+                import os as _os
+                _proxies = None
+                if getattr(site, 'proxy', False):
+                    _proxy_url = _os.environ.get('HTTP_PROXY') or _os.environ.get('HTTPS_PROXY') or 'http://192.168.2.70:7892'
+                    _proxies = {'http': _proxy_url, 'https': _proxy_url}
+
+                # 对于需要点击签到按钮的站点（学校、高清视界、我堡、观众），直接使用Playwright自动点击
+                need_auto_click_site = (
+                    ("btschool" in site_url_lower or "学校" in site_name) or
+                    ("hdarea" in site_url_lower or "高清视界" in site_name) or
+                    ("ourbits" in site_url_lower or "我堡" in site_name) or
+                    ("audiences" in site_url_lower or "观众" in site_name)
+                )
+                if need_auto_click_site:
+                    _log(f"{site_name}: 需要点击签到按钮，直接使用Playwright自动点击...")
+                    # 学校和高清视界的签到URL是index.php?action=sign，我堡和观众是attendance.php
+                    if "ourbits" in site_url_lower or "我堡" in site_name or "audiences" in site_url_lower or "观众" in site_name:
+                        auto_click_url = f"{site_url.rstrip('/')}/attendance.php"
+                    else:
+                        auto_click_url = f"{site_url.rstrip('/')}/index.php?action=sign"
+                    try:
+                        def _auto_click_sign(page):
+                            """自动点击签到按钮的回调函数"""
+                            try:
+                                page.wait_for_load_state("networkidle", timeout=10000)
+                            except:
+                                pass
+                            
+                            # 签到成功关键词（用于点击后检测结果）
+                            success_keywords = [
+                                "签到成功", "签到完成", "成功签到", "已签到", "今日已签到",
+                                "已经签到", "请勿重复签到", "获得魔力", "魔力+", "签到奖励",
+                                "打卡成功", "签到已完成", "签到已得", "查看签到记录",
+                                "簽到成功", "簽到完成", "簽到獎勵", "獲得魔力", "簽到已得",
+                                "查看簽到記錄", "验证通过", "爆米花"
+                            ]
+                            
+                            def _wait_for_result(site_name, max_wait=30):
+                                """点击签到后循环等待结果，最多等待max_wait秒"""
+                                import time as _tw
+                                _log(f"{site_name}: 等待签到结果（最长{max_wait}秒）...")
+                                for i in range(max_wait // 2):
+                                    _tw.sleep(2)
+                                    try:
+                                        current_text = page.inner_text('body')
+                                        if any(kw in current_text for kw in success_keywords):
+                                            _log(f"{site_name}: 检测到签到结果（文本关键词）")
+                                            return True
+                                        # 观众站点：检测attendance-card--done元素
+                                        if "audiences" in site_url_lower or "观众" in site_name:
+                                            done_card = page.query_selector('.attendance-card--done')
+                                            if done_card:
+                                                _log(f"{site_name}: 检测到签到结果（attendance-card--done）")
+                                                return True
+                                    except:
+                                        pass
+                                _log_warn(f"{site_name}: 等待签到结果超时")
+                                return False
+                            
+                            if "hdarea" in site_url_lower or "高清视界" in site_name:
+                                # 高清视界：签到通过JS函数sign_in('sign_in')触发，不是直接访问URL
+                                # 先检查是否已签到（绿色[已签到]）
+                                try:
+                                    already_signed = page.evaluate("""
+                                        (function() {
+                                            var greenFont = document.querySelector('font[color="green"]');
+                                            if (greenFont && greenFont.textContent.indexOf('[已签到]') >= 0) {
+                                                return true;
+                                            }
+                                            return false;
+                                        })();
+                                    """)
+                                    if already_signed:
+                                        _log(f"{site_name}: 检测到已签到（绿色[已签到]）")
+                                        return
+                                except:
+                                    pass
+                                # 调用sign_in函数触发签到
+                                try:
+                                    page.evaluate("if (typeof sign_in === 'function') { sign_in('sign_in'); }")
+                                    _log(f"{site_name}: 已调用sign_in('sign_in')函数触发签到")
+                                    clicked = True
+                                except Exception as e:
+                                    _log_warn(f"{site_name}: 调用sign_in函数失败，尝试点击[签到]链接: {e}")
+                                    # 备用：点击[签到]链接
+                                    try:
+                                        page.click('a:has-text("[签到]")', timeout=5000)
+                                        _log(f"{site_name}: 已点击[签到]链接")
+                                        clicked = True
+                                    except Exception as e2:
+                                        _log_warn(f"{site_name}: 点击[签到]链接失败: {e2}")
+                                if clicked:
+                                    _wait_for_result(site_name, max_wait=20)
+                            elif "btschool" in site_url_lower or "学校" in site_name:
+                                # 学校：点击"每日签到"按钮，然后等待结果
+                                clicked = False
+                                try:
+                                    page.click('a:has-text("每日签到")', timeout=5000)
+                                    _log(f"{site_name}: 已点击每日签到按钮")
+                                    clicked = True
+                                except:
+                                    try:
+                                        page.click('text=每日签到', timeout=5000)
+                                        _log(f"{site_name}: 已点击每日签到按钮(text选择器)")
+                                        clicked = True
+                                    except Exception as e2:
+                                        _log_warn(f"{site_name}: 点击每日签到按钮失败(可能已签到): {e2}")
+                                if clicked:
+                                    _wait_for_result(site_name, max_wait=20)
+                            elif "audiences" in site_url_lower or "观众" in site_name:
+                                # 观众：先检查是否已签到（attendance-card--done），未签到则点击人机验证DIV
+                                try:
+                                    already_done = page.evaluate("""
+                                        (function() {
+                                            var doneCard = document.querySelector('.attendance-card--done');
+                                            if (doneCard) return true;
+                                            return false;
+                                        })();
+                                    """)
+                                    if already_done:
+                                        _log(f"{site_name}: 检测到已签到（attendance-card--done）")
+                                        return
+                                except:
+                                    pass
+                                # 点击"人机验证"DIV（class: attendance-card--verify），然后等待CF验证通过
+                                try:
+                                    page.click('.attendance-card--verify', timeout=5000)
+                                    _log(f"{site_name}: 已点击人机验证DIV(.attendance-card--verify)")
+                                except:
+                                    try:
+                                        page.click('text=人机验证', timeout=5000)
+                                        _log(f"{site_name}: 已点击人机验证(text选择器)")
+                                    except Exception as e2:
+                                        _log_warn(f"{site_name}: 点击人机验证失败: {e2}")
+                                # 观众CF验证较慢，等待60秒
+                                _wait_for_result(site_name, max_wait=60)
+                            elif "ourbits" in site_url_lower or "我堡" in site_name:
+                                # 我堡：点击签到按钮，然后等待CF验证和签到结果
+                                clicked = False
+                                try:
+                                    page.click('text=签到', timeout=5000)
+                                    _log(f"{site_name}: 已点击签到按钮")
+                                    clicked = True
+                                except:
+                                    try:
+                                        page.click('a:has-text("签到")', timeout=5000)
+                                        _log(f"{site_name}: 已点击签到链接")
+                                        clicked = True
+                                    except Exception as e2:
+                                        _log_warn(f"{site_name}: 点击签到按钮失败（可能已签到）: {e2}")
+                                if clicked:
+                                    # 我堡点击后需要等待CF五秒盾验证通过
+                                    _wait_for_result(site_name, max_wait=30)
+                            
+                            # 等待签到完成
+                            try:
+                                page.wait_for_load_state("networkidle", timeout=10000)
+                            except:
+                                pass
+                            import time as _t
+                            _t.sleep(2)
+                            
+                            # 返回点击后的页面源码
+                            return page.content()
+                        
+                        page_source = PlaywrightHelper().action(
+                            url=auto_click_url,
+                            callback=_auto_click_sign,
+                            cookies=site_cookie,
+                            ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            timeout=90
+                        )
+                        if page_source and len(page_source) > 0:
+                            _log(f"{site_name}: 自动点击签到按钮成功，页面长度={len(page_source)}")
+                        else:
+                            _log_warn(f"{site_name}: 自动点击签到按钮后页面为空")
+                    except Exception as e:
+                        _log_warn(f"{site_name}: 自动点击签到按钮异常: {e}")
+
+                # 标记：自动点击是否已成功获取页面（避免后续requests/Playwright覆盖结果）
+                auto_click_done = bool(page_source and len(page_source) > 500)
+                if auto_click_done:
+                    _log(f"{site_name}: 自动点击已获取签到结果页面，跳过后续请求降级")
+
+                # 春天/朋友站点：无签到按钮，直接用Playwright访问主页判断登录状态（登录保号）
+                no_sign_button_site = (
+                    ("springsunday" in site_url_lower or "春天" in site_name) or
+                    ("keepfrds" in site_url_lower or "朋友" in site_name)
+                )
+                if no_sign_button_site and not auto_click_done:
+                    _log(f"{site_name}: 无签到按钮站点，直接Playwright访问主页判断登录状态...")
+                    try:
+                        home_url = f"{site_url.rstrip('/')}/index.php"
+                        pw_source = PlaywrightHelper().get_page_source(
+                            url=home_url,
+                            cookies=site_cookie,
+                            ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            timeout=30
+                        )
+                        if pw_source and len(pw_source) > 500:
+                            page_source = pw_source
+                            auto_click_done = True
+                            _log(f"{site_name}: Playwright获取主页成功，长度={len(page_source)}")
+                        else:
+                            _log_warn(f"{site_name}: Playwright获取主页失败或页面过短")
+                    except Exception as e:
+                        _log_warn(f"{site_name}: Playwright访问主页异常: {e}")
+
+                # 第1步：普通请求（最快），只使用硬编码的签到URL，不再试探其他URL
+                fallback_urls = [sign_url]
+                for try_url in fallback_urls:
+                    if auto_click_done:
+                        break
+                    try:
+                        # 改用requests库直接请求，绕过MP RequestUtils的headers问题（User-Agent=None导致站点拒绝）
+                        import requests as _requests_lib
+                        _headers = {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                        }
+                        if site_cookie:
+                            _headers['Cookie'] = site_cookie
+                        resp = _requests_lib.get(try_url, headers=_headers, timeout=30, verify=False, proxies=_proxies)
+                        resp_text = resp.content.decode('utf-8', errors='replace') if resp else ""
+                        if resp and resp.status_code == 200 and resp_text and len(resp_text) > 100:
+                            # 检查是否是404页面或空页面
+                            if '404' in resp_text[:500] and 'Not Found' in resp_text[:500]:
+                                _log_warn(f"{site_name}: URL返回404: {try_url}")
+                                continue
+                            page_source = resp_text
+                            if try_url != sign_url:
+                                _log(f"{site_name}: fallback成功，使用URL: {try_url}")
+                            break
+                        else:
+                            status = resp.status_code if resp else "无响应"
+                            _log_warn(f"{site_name}: URL请求失败(状态码:{status}): {try_url}")
+                    except Exception as e:
+                        _log_warn(f"{site_name}: URL请求异常: {try_url}, 错误: {e}")
+
+                # 检查是否所有URL都失败了
+                all_urls_failed = not page_source or len(page_source) < 50
+                
+                # 检查页面是否包含403/雷池/安全验证/CF5秒盾关键词
+                has_403_block = False
+                if page_source:
+                    block_keywords = ['403', 'Forbidden', '雷池', '安全验证', '正在验证', '访问被拒绝', '请求被拦截', 'WAF', 'Web Application Firewall',
+                                      # CF5秒盾关键词（我堡、观众等站点）
+                                      '请耐心等待', '验证通过后将自动完成签到', '签到验证程序加载',
+                                      'Just a moment', 'Checking your browser', 'cf-challenge', 'under_challenge',
+                                      'cloudflare', 'Attention Required']
+                    has_403_block = any(kw.lower() in page_source.lower() for kw in block_keywords)
+                    if has_403_block:
+                        _log(f"{site_name}: 检测到403/雷池/安全验证/CF5秒盾页面，准备降级浏览器仿真")
+                
+                # 第1.5步：如果站点开启了浏览器仿真(render=True)，或者检测到403/雷池，直接用Playwright（自动点击成功则跳过）
+                if not auto_click_done and (site_render or has_403_block):
+                    _log(f"{site_name}: 站点render={site_render}, 403拦截={has_403_block}，使用Playwright浏览器仿真")
+                    page_source = None
+                    try:
+                        # 雷池/安全验证页面需要更长等待时间（猪猪等站点雷池验证较慢）
+                        pw_timeout = 120 if has_403_block else 30
+                        page_source = PlaywrightHelper().get_page_source(
+                            url=sign_url,
+                            cookies=site_cookie,
+                            ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            timeout=pw_timeout
+                        )
+                        if page_source:
+                            _log(f"{site_name}: Playwright获取页面成功，长度={len(page_source)}")
+                            # 先判断是否是CF拦截页面（排除CF拦截，避免误判为雷池验证）
+                            is_cf_block = ("Attention Required" in page_source or "cf-error" in page_source or
+                                           "you have been blocked" in page_source.lower() or
+                                           "cloudflare" in page_source.lower()[:500])
+                            # 如果页面还是雷池验证页面（非CF拦截），等待10秒后重试1次
+                            leichi_keywords = ['雷池', '安全验证', '正在验证', '请稍候', '访问被拒绝', '请求被拦截']
+                            if not is_cf_block and any(kw in page_source for kw in leichi_keywords) and len(page_source) < 50000:
+                                _log(f"{site_name}: 页面仍为雷池验证页面，等待10秒后重试...")
+                                import time as _time
+                                _time.sleep(10)
+                                retry_source = PlaywrightHelper().get_page_source(
+                                    url=sign_url,
+                                    cookies=site_cookie,
+                                    ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                    timeout=pw_timeout
+                                )
+                                if retry_source and len(retry_source) > len(page_source):
+                                    page_source = retry_source
+                                    _log(f"{site_name}: 重试成功，页面长度={len(page_source)}")
+                    except Exception as e:
+                        _log_warn(f"{site_name}: Playwright失败: {e}")
+
+                # 第2步：检测CF挑战，降级FlareSolverr
+                if page_source and under_challenge(page_source) and self._auto_cf >= 1:
+                    _log(f"{site_name}: 检测到CF挑战，降级FlareSolverr")
+                    page_source = None
