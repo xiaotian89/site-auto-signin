@@ -44,7 +44,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.8.2"
+    plugin_version = "3.8.3"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -169,7 +169,7 @@ class ProSignin(_PluginBase):
                                 {'title': '每天 9:00', 'value': '0 9 * * *'},
                                 {'title': '每天 10:00', 'value': '0 10 * * *'},
                                 {'title': '每天 12:00', 'value': '0 12 * * *'},
-                                {'title': '每天 18:00', 'value': '0 18 * * * *'},
+                                {'title': '每天 18:00', 'value': '0 18 * * *'},
                                 {'title': '每天 22:00', 'value': '0 22 * * *'},
                                 {'title': '每小时', 'value': '0 * * * *'},
                                 {'title': '每30分钟', 'value': '*/30 * * * *'},
@@ -1183,7 +1183,7 @@ class ProSignin(_PluginBase):
             # 52PT专门处理
             is_52pt = '52pt' in site_name.lower() or '52pt' in sign_url.lower()
             # 农场专门处理（滑块元素ID: dragHandler）
-            is_farm = '0ff' in site_url_lower or '农场' in site_name
+            is_farm = '0ff' in sign_url.lower() or '农场' in site_name
             
             if is_52pt:
                 return self.__handle_52pt_slider(page, site_name)
@@ -1393,6 +1393,7 @@ class ProSignin(_PluginBase):
     def __handle_farm_slider(self, page, site_name):
         """农场滑块专门处理：用真实鼠标拖动完成验证（农场有轨迹检测，JS直接设置位置不生效）"""
         import time as _t
+        import random as _r2
         
         try:
             # 等待滑块加载
@@ -1435,9 +1436,9 @@ class ProSignin(_PluginBase):
             for i in range(1, steps + 1):
                 cur_x = start_x + (end_x - start_x) * i / steps
                 # Y轴随机小幅度抖动
-                cur_y = start_y + (_t.random() - 0.5) * 4 if hasattr(_t, 'random') else start_y
+                cur_y = start_y + (_r2.random() - 0.5) * 4
                 mouse.move(cur_x, cur_y)
-                _t.sleep(0.02 + _t.random() * 0.03 if hasattr(_t, 'random') else 0.03)
+                _t.sleep(0.02 + _r2.random() * 0.03)
             
             mouse.move(end_x, end_y)
             _t.sleep(0.1)

@@ -2,7 +2,7 @@
   "ProSignin": {
     "name": "站点自动签到Pro",
     "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
-    "version": "3.8.2",
+    "version": "3.8.3",
     "author": "xiaotian",
     "level": 1,
     "release": true,

@@ -1,13 +1,13 @@
 {
-  "ProSignin": {
-    "name": "站点自动签到Pro",
-    "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
-    "labels": "签到,PT,自动签到",
-    "version": "3.8.2",
-    "icon": "https://img.icons8.com/fluency/96/calendar.png",
-    "author": "xiaotian",
-    "level": 1,
-    "release": true,
-    "system_version": ">=3.0.0"
-  }
+    "ProSignin": {
+        "name": "站点自动签到Pro",
+        "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
+        "labels": "签到,PT,自动签到",
+        "version": "3.8.3",
+        "icon": "https://img.icons8.com/fluency/96/calendar.png",
+        "author": "xiaotian",
+        "level": 1,
+        "release": true,
+        "system_version": ">=3.0.0"
+    }
 }
