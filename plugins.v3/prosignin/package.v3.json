@@ -1,13 +1,42 @@
 {
-    "ProSignin": {
-        "name": "站点自动签到Pro",
-        "description": "多站点自动签到，CF智能降级+失败重试+并发队列+签到历史统计。",
-        "labels": "签到,PT,自动签到",
-        "version": "3.8.3",
-        "icon": "https://img.icons8.com/fluency/96/calendar.png",
-        "author": "xiaotian",
-        "level": 1,
-        "release": true,
-        "system_version": ">=3.0.0"
-    }
+ "ProSignin": {
+  "name": "站点自动签到Pro",
+  "description": "多站点自动签到，单线程顺序+随机间隔+失败重试，CF智能降级，站点专用签到逻辑，签到历史统计。",
+  "labels": "签到,PT,自动签到",
+  "version": "3.9.7",
+  "icon": "https://img.icons8.com/fluency/96/calendar.png",
+  "author": "xiaotian",
+  "level": 1,
+  "release": true,
+  "system_version": ">=3.0.0",
+  "history": {
+   "v3.9.6": "补齐/修复5个站点签到（v3.9.6）：\n1) 天空(hdsky.me)：重写为真实流程——POST showup.php{action:check} 判已签；image_code_ajax.php{action:new} 取 code -> image.php 取验证码图 -> ddddocr 识别 -> POST showup.php{action:showup}，返回 {success:true,message:魔力值}\n2) 皇后(open.cd)：重写为 plugin_sign-in.php 取 imagehash+验证码图 -> ddddocr(6位字母数字) -> POST ?cmd=signin，返回 {state:success,integral:..}\n3) 彩虹岛(ptchdbits)：已签到判定补充\"今天已经签过到\"文案\n4) 憨憨(hhanclub)：新增专用方法，解析 attendance.php 内嵌日历 data 判断当日是否已签\n5) 我堡(ourbits.club)：Turnstile 交互验证分支（与观众同款：进 iframe 点勾选框 + 等页面提交完成）",
+   "v3.9.5": "观众(audiences.me) Cloudflare Turnstile 签到打通（v3.9.5）：\n1) 观众重新纳入 Playwright 自动点击：进跨域 iframe(challenges.cloudflare.com) 点勾选框\n2) 修正成功判定：提交后页面重载、cf-token 消失，改为等 attendance-card--done / \"今日已签到\" 文案\n3) 清理误判关键词：去掉静态文案\"验证通过\"/\"爆米花\"（页面固定文案会假成功）\n4) 最多 3 轮刷新重试，失败落截图 /tmp/aud_tk_fail_N.png 便于排查",
+   "v3.9.2": "修复4个站点签到误判（v3.9.2）：\n1) 高清视界(hdarea.club)：改走 POST sign_in.php + action=sign_in 直连API，不再依赖会被误判的绿色[已签到]span（该span恒存在且display:none）\n2) 蟹黄堡(crabpt.vip)：修正拦截关键词误判——裸'403'会命中正常页面的分类链接(cat=403)，导致正常签到成功页被误降级；改为仅匹配真实拦截标识\n3) 朋友(pt.keepfrds.com)：改为优先用requests判断登录状态，不再因Playwright命中CF页而误报'CF拦截/IP被封'\n4) 观众(audiences.me)：精确识别 Cloudflare Turnstile 交互式人机验证，如实报告'需要人机验证'，不再笼统报CF5秒盾超时",
+   "v3.9.0": "改为单线程顺序签到+站点间随机间隔；失败站点等待15秒自动重试；新增AGSVPT/天空/皇后/彩虹岛专用签到逻辑；识别'已签到无需再签'；修复emoji解析bug",
+   "v3.8.3": "修复农场滑块_t.random()调用错误(Y轴抖动从未生效)；修复site_url_lower闭包作用域NameError；修复cron 18:00选项6段式无效",
+   "v3.8.2": "去掉试探性请求(fallback URL)；高清视界改用sign_in()JS函数触发；观众站点attendance-card检测；CF等待60秒",
+   "v3.8.1": "高清视界签到URL改为index.php，自动调用sign_in() JS函数",
+   "v3.8.0": "52PT添加Referer检测，从主页点击签到赚魔力进入；JS滑块+提交",
+   "v3.7.9": "移除52PT签到页面暂停检测(实际页面正常)",
+   "v3.7.8": "农场滑块用真实鼠标分20段拖动(有轨迹检测，JS方式无效)",
+   "v3.7.7": "取消重试max_retries=0；签到URL硬编码_SIGN_URL_MAP避免加速Cookie过期",
+   "v3.1.0": "修复缺少import json",
+   "v3.0.9": "新增滑块验证码自动拖动",
+   "v3.0.8": "修复缺少import os",
+   "v3.0.7": "修复微信通知发送失败(MP v3通知模块路径变更)",
+   "v3.0.6": "修复历史记录写入失败(中英文冒号不匹配)",
+   "v3.0.5": "改进日志输出",
+   "v3.0.4": "简化插件介绍",
+   "v3.0.3": "执行周期改下拉选择",
+   "v3.0.2": "修复无记录时显示HTML源码",
+   "v3.0.1": "重写get_page为原生div+CSS",
+   "v3.0.0": "新增详细数据页面",
+   "v3.9.7": "修复2个站点签到判定（v3.9.7）：\n1) 皇后(open.cd)：提交返回 {\"state\":\"false\"} 且无 msg 判定为\"今日已签\"，不再误报失败（区别 msg:\"验证码错误\" 才是真失败）\n2) 我堡(ourbits.club)：Playwright 前先用 requests 直取 attendance.php，命中\"今天已经签到过了/请勿重复刷新\"即判定已签，避免 CF Turnstile 对 headless 不可过导致的假失败\n3) 已签关键词表补齐：已经签到过了 / 请勿重复刷新 / 您今天已经签到"
+  }
+ },
+ "version": "3.9.1",
+ "history": {
+  "v3.9.1": "修复3个站点自动签到：\n1) 52pt：改用真实鼠标拖动滑块（原来用JS直接设位置，站点校验轨迹导致失败）\n2) 自由农场(pt.0ff.cc)：把Cookie同步进浏览器CookieJar并清除强制请求头（原来滑块验证后reload读不到浏览器cookie被判未登录）\n3) 肉丝(rousi.pro)：重写PeerGo API判定逻辑（400+code1+今日已签到 正确识别为已签到，不再误报失败）"
+ }
 }
