@@ -101,7 +101,7 @@ class ProSignin(_PluginBase):
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，单线程顺序+随机间隔+失败重试，CF智能降级，站点专用签到逻辑，签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.9.10"
+    plugin_version = "3.9.14"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -393,7 +393,7 @@ class ProSignin(_PluginBase):
     _SIGN_URL_MAP = {
         # 特殊签到URL
         '52pt': '52bakatestdate0823.php',
-        'pttime': 'attendance.php?type=list',
+        'pttime': 'attendance.php',          # PT时间：只认签到端点(带 ?type=list 是记录列表页)
         # 需要点击签到按钮的站点（Playwright自动点击）
         'btschool': 'index.php?action=sign',
         'hdarea': 'index.php',
@@ -485,6 +485,10 @@ class ProSignin(_PluginBase):
                     return api_result
                 elif "hhanclub" in site_url_lower or "憨憨" in site_name:
                     api_result = self.__signin_hhanclub(site, site_name, site_url)
+                    _log(api_result)
+                    return api_result
+                elif "pttime" in site_url_lower or "PT时间" in site_name:
+                    api_result = self.__signin_pttime(site, site_name, site_url)
                     _log(api_result)
                     return api_result
                 
@@ -1963,47 +1967,200 @@ class ProSignin(_PluginBase):
         except Exception as e:
             return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
 
-    def __signin_ptchdbits(self, site, site_name, site_url):
-        """彩虹岛(ptchdbits) 签到：bakatest.php 问答题签到，自动回答简单题目"""
+    def __signin_pttime(self, site, site_name, site_url):
+        """PT时间(pttime.org) 签到。
+
+        签到端点是 attendance.php，返回的是**纯文本**而非 HTML 页面：
+            "签到成功"                    -> 本次签到成功
+            "拒绝访问：已签到，无需再签"    -> 今日已签（算成功）
+            "err cookie"                  -> Cookie 失效
+
+        历史 bug（v3.9.10 及以前一直误报成功）：
+        1) URL 映射写成了 attendance.php?type=list —— 那是"签到记录列表页"，
+           请求它不会签到，页面里也没有签到结果；
+        2) 通用判定调用了 SiteUtils.is_checkin()，其 XPath 含
+           //a[contains(@href, "attendance")]，而首页导航恒有
+           <a href="attendance.php?type=list">签到详情</a>，
+           于是无论如何都返回"已签到" —— 永久假阳性。
+        因此该站必须独立判定：只认签到端点返回的纯文本。
+        """
         try:
-            import requests as _requests_lib
+            import requests as _req
             import re as _re
             site_cookie = getattr(site, "cookie", "") or ""
             if not site_cookie:
                 return f"❌ {site_name}: 无Cookie"
-            ua = getattr(site, "ua", "") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            ua = getattr(site, "ua", "") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             timeout = getattr(site, "timeout", 30) or 30
+            base = site_url.rstrip("/")
 
-            s = _requests_lib.Session()
+            s = _req.Session()
             s.headers.update({
                 "User-Agent": ua,
                 "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9",
                 "Cookie": site_cookie,
+                "Referer": base + "/index.php",
             })
-            url = f"{site_url.rstrip('/')}/bakatest.php"
-            r = s.get(url, timeout=timeout, verify=False)
-            if r.status_code != 200:
-                return f"❌ {site_name}: 无法访问签到页(状态码:{r.status_code})"
-            page = r.content.decode("utf-8", errors="replace")
-            if "签到成功" in page or "已签到" in page or "今天已经签过到" in page or "已经签过到" in page:
-                return f"✅ {site_name}: 已签到"
 
-            # 解析题目和选项
-            q_match = _re.search(r"请问[：:]([^<]+)", page)
-            qid_match = _re.search(r'name="questionid"\s+value="([^"]+)"', page)
-            options = _re.findall(r"name='choice\[\]'\s+value='(\d+)'\s*>\s*([^<]+)", page)
-            if not (qid_match and options):
-                return f"⚠️ {site_name}: 签到页面结构变化(无法自动作答)"
+            def _bonus(html):
+                # 页头结构：<a href="mybonus.php">使用&说明</a>]：553510.1
+                m = _re.search(r"\]\s*[：:]\s*([\d,]+(?:\.\d+)?)", html)
+                return m.group(1) if m else None
 
-            qtext = q_match.group(1) if q_match else ""
-            opt_map = {x.strip(): v for v, x in options}   # 选项文本 -> value
-            multi = ("多选" in page) or ("哪三部" in qtext) or ("哪三" in qtext) \
-                    or ("哪些" in qtext) or ("多選" in page)
+            _b0 = None
+            try:
+                _h0 = s.get(base + "/index.php", timeout=timeout, verify=False)
+                _b0 = _bonus(_h0.content.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
 
-            # ---- 内置题库（键 = 题干特征词，值 = 正确选项文本列表）----
+            last = ""
+            for _attempt in range(3):
+                r = s.get(base + "/attendance.php", timeout=timeout, verify=False)
+                body = (r.content.decode("utf-8", errors="replace") or "").strip()
+                last = body
+                low = body.lower()
+                if "err cookie" in low:
+                    return f"❌ {site_name}: Cookie失效"
+                # 极短纯文本响应，直接按文案判定，不套 HTML 关键词匹配
+                if "签到成功" in body:
+                    return f"✅ {site_name}: 签到成功"
+                if "已签到" in body or "无需再签" in body:
+                    return f"✅ {site_name}: 已签到(今日已签)"
+                import time as _t
+                _t.sleep(3)
+
+            # 三次未知响应：用魔力值增量做最终判定
+            try:
+                _h1 = s.get(base + "/index.php", timeout=timeout, verify=False)
+                _b1 = _bonus(_h1.content.decode("utf-8", errors="replace"))
+                if _b0 and _b1:
+                    _a = float(str(_b0).replace(",", ""))
+                    _c = float(str(_b1).replace(",", ""))
+                    if _c > _a:
+                        return f"✅ {site_name}: 签到成功(魔力值+{round(_c - _a, 1)})"
+            except Exception:
+                pass
+            _log_warn(f"{site_name}: 签到响应异常 -> {last[:80]}")
+            return f"⚠️ {site_name}: 签到未确认"
+        except Exception as e:
+            return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
+
+    def __signin_ptchdbits(self, site, site_name, site_url):
+        """彩虹岛(ptchdbits.co) 签到：bakatest.php 每日答题签到。
+
+        站点机制（2026-10-18 实测确认）：
+        - 入口恒为 bakatest.php，页面顶部有权威状态行：
+              "今天已经签过到了(已连续N天签到)"   -> 今日已签
+        - 未签到时页面给出题目表单：questionid + choice[]（单选/多选）+ 提交
+        - 提交后服务端重新出题（可无限答题），因此**不能**用"页面有没有题目"
+          判断签到成败，必须回读顶部状态行。
+        - wantskip=不会 单独提交会返回"没有选择选项哦"，无效。
+
+        历史 bug（<= v3.9.11，长期假成功）：
+        判定写的是 if "回答正确" in t3 ...，而该站页面底部规则区**固定**包含
+        "不会却回答正确额外获得5魔力值"这段文案，导致该条件无条件成立，
+        无论答对答错都返回"✅ 签到成功"。
+        修复：删除所有静态文案判定，改为回读"今天已经签过到"状态行；
+        辅以魔力值增量兜底。
+        """
+        try:
+            import requests as _req
+            import re as _re
+            import time as _tw
+
+            site_cookie = getattr(site, "cookie", "") or ""
+            if not site_cookie:
+                return f"❌ {site_name}: 无Cookie"
+            ua = getattr(site, "ua", "") or ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                             "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                             "Chrome/120.0.0.0 Safari/537.36")
+            timeout = getattr(site, "timeout", 30) or 30
+            base = site_url.rstrip("/")
+            page_url = base + "/bakatest.php"
+
+            s = _req.Session()
+            s.headers.update({
+                "User-Agent": ua,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Cookie": site_cookie,
+                "Referer": base + "/index.php",
+            })
+
+            def _norm(t):
+                return (t or "").replace("&nbsp;", " ")
+
+            def _signed(t):
+                """回读站点自己的状态行，这是唯一权威判据"""
+                t = _norm(t)
+                return ("今天已经签过到" in t or "已经签过到" in t
+                        or "今天已經簽到" in t or "已签到" in t)
+
+            def _streak(t):
+                m = _re.search(r"已连续\s*(\d+)\s*天", _norm(t))
+                return m.group(1) if m else None
+
+            def _magic(t):
+                # 页头原文是：魔力值 </font>[<a href="mybonus.php">使用</a>]: 1,382,415.3
+                # 「魔力值」与「使用」之间夹着 </font> 和 <a>，直接把标签剥掉再匹配才可靠。
+                t = _norm(t)
+                t = _re.sub(r"<script.*?</script>", " ", t, flags=_re.S)
+                t = _re.sub(r"<style.*?</style>", " ", t, flags=_re.S)
+                t = _re.sub(r"<[^>]+>", " ", t)
+                t = " ".join(t.split())
+                m = _re.search(r"魔力值\s*\[\s*使用\s*\]\s*[:：]\s*([\d,]+(?:\.\d+)?)", t)
+                if not m:
+                    m = _re.search(r"魔力值\s*[:：]\s*([\d,]+(?:\.\d+)?)", t)
+                if not m:
+                    return None
+                try:
+                    return float(m.group(1).replace(",", ""))
+                except Exception:
+                    return None
+
+            def _fetch():
+                r = s.get(page_url, timeout=timeout, verify=False)
+                return r.status_code, _norm(r.content.decode("utf-8", errors="replace"))
+
+            st, page = _fetch()
+            if st != 200:
+                return f"❌ {site_name}: 无法访问签到页(状态码:{st})"
+            if "err cookie" in page.lower() or "你需要先登录" in page:
+                return f"❌ {site_name}: Cookie失效"
+
+            # 开场先判今日是否已签
+            if _signed(page):
+                _n = _streak(page)
+                # 该站奖励公式：随机取得(连续天数)~(连续天数*2)魔力值。
+                # 连续天数为 0 时奖励区间是 0~0，即本次签到奖励为 0，
+                # 这不是失败，站点状态行已明确"今天已经签过到了"。
+                if _n == "0":
+                    return f"✅ {site_name}: 已签到(连续0天，按站点公式本次奖励为0魔力)"
+                return f"✅ {site_name}: 已签到" + (f"(连续{_n}天)" if _n else "")
+
+            m0 = _magic(page)
+            # 该站「今天已经签过到了」与答题表单会同时出现（答完还给新题可无限练习），
+            # 既然站点自己说今天已签，就不要再提交答案——多答多扣分。
+            qid = _re.search(r'name="questionid"\s+value="(\d+)"', page)
+            opts = _re.findall(r"name='choice\[\]'\s+value='(\d+)'\s*>\s*([^<]+)", page)
+            if not (qid and opts):
+                return f"⚠️ {site_name}: 无题目表单且未见已签标记(页面结构变化)"
+
+            qtext = ""
+            mq = _re.search(r"\[([^\]]*)\]\s*\[([^\]]*)\]\s*(?:请问：)?([^<\n]+)", page)
+            if mq:
+                qtext = mq.group(3).strip()
+            multi = "多选" in page or "多選" in page
+
+            opt_map = {txt.strip(): v for v, txt in opts}
+
+            # ---- 题库：题干特征词 -> 正确选项文本 ----
             _BANK = {
                 "嘻哈三部曲": ["绝世高手", "婚纱照", "浮游目击者"],
+                "大业炎": ["弃掉四张不同花色手牌"],
+                "第一次世界大战的战败国": ["德国", "奥匈帝国", "奥斯曼帝国", "保加利亚"],
             }
             chosen = []
             for k, ans in _BANK.items():
@@ -2011,43 +2168,58 @@ class ProSignin(_PluginBase):
                     chosen = [opt_map[a] for a in ans if a in opt_map]
                     break
 
+            # 天干地支类
             if not chosen:
-                # 天干地支（单选）
                 tiangan = "甲乙丙丁戊己庚辛壬癸"
                 dizhi = "子丑寅卯辰巳午未申酉戌亥"
-                ans_char = None
+                ch = None
                 if "天干" in qtext:
-                    ans_char = tiangan[-1] if ("最后" in qtext or "末" in qtext) else tiangan[0]
+                    ch = tiangan[-1] if ("最后" in qtext or "末" in qtext) else tiangan[0]
                 elif "地支" in qtext:
-                    ans_char = dizhi[-1] if ("最后" in qtext or "末" in qtext) else dizhi[0]
-                if ans_char:
-                    for val, txt in options:
-                        if txt.strip().startswith(ans_char):
-                            chosen = [val]
+                    ch = dizhi[-1] if ("最后" in qtext or "末" in qtext) else dizhi[0]
+                if ch:
+                    for v, txt in opts:
+                        if txt.strip().startswith(ch):
+                            chosen = [v]
                             break
 
             if not chosen:
-                # 题库未收录：注意 wantskip 在该站无效（服务端返回"没有选择选项哦"），
-                # 因此改为随便选一个，至少让站点走完签到流程。
-                if multi:
-                    chosen = [options[0][0], options[1][0]] if len(options) >= 2 else [options[0][0]]
-                else:
-                    chosen = [options[0][0]]
-                _log_warn(f"{site_name}: 题库未收录该题，已随机作答({len(chosen)}项): {qtext[:40]}")
+                # 未收录：**绝不盲答**。
+                # 该站规则第 5 条：回答错误扣 1 个魔力（换题扣更多）。
+                # 实测盲选 4 项后魔力值 1,382,414.3 -> 1,382,413.3（-1.0）。
+                # 盲答只会亏魔力，且站点顶部状态行已说明今日签到状态，
+                # 因此未命中题库时直接放弃作答，按状态行如实汇报。
+                _log_warn(f"{site_name}: 题库未收录，为避免答错扣魔力，放弃作答: {qtext[:40]}")
+                _n = _streak(page)
+                return (f"⚠️ {site_name}: 未收录题目已跳过(避免答错扣魔力)"
+                        + (f"，今日已签(连续{_n}天)" if _signed(page) else ""))
 
-            # ---- 提交（多选：choice[] 重复传多个值）----
-            data = [("questionid", qid_match.group(1)),
+            data = [("questionid", qid.group(1)),
                     ("usercomment", "此刻心情:无"),
                     ("submit", "提交")]
             for v in chosen:
                 data.append(("choice[]", v))
-            r3 = s.post(url, data=data, timeout=timeout, verify=False)
-            t3 = r3.content.decode("utf-8", errors="replace")
-            if "签到成功" in t3 or "回答正确" in t3 or "恭喜" in t3 or "今天已经签过到" in t3:
-                return f"✅ {site_name}: 签到成功"
-            if "回答错误" in t3 or "没有选择选项" in t3:
-                return f"⚠️ {site_name}: 答题未通过(请浏览器手动签到)"
-            return f"⚠️ {site_name}: 签到未确认"
+            s.post(page_url, data=data, timeout=timeout, verify=False)
+            _tw.sleep(2)
+
+            # 回读状态行做二次验证（首要判据）
+            _tw.sleep(1)
+            st2, page2 = _fetch()
+            if _signed(page2):
+                n = _streak(page2)
+                m1 = _magic(page2)
+                if m0 is not None and m1 is not None and m1 > m0:
+                    return f"✅ {site_name}: 签到成功(魔力值+{round(m1 - m0, 1)})"
+                if n == "0":
+                    return f"✅ {site_name}: 签到成功(连续0天，按站点公式本次奖励为0魔力)"
+                return f"✅ {site_name}: 签到成功" + (f"(连续{n}天)" if n else "")
+
+            # 兜底：魔力值增量（做种也会涨，仅作参考）
+            m1 = _magic(page2)
+            if m0 is not None and m1 is not None and m1 > m0:
+                return f"✅ {site_name}: 签到成功(魔力值+{round(m1 - m0, 1)})"
+
+            return f"⚠️ {site_name}: 答题已提交但未确认签到(请浏览器核对)"
         except Exception as e:
             return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
 
