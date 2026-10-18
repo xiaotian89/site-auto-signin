@@ -4,6 +4,7 @@
 自动签到MP里所有已添加站点，FlareSolverr优先过CF，失败自动降级Playwright浏览器渲染。
 """
 import os
+import sys as _sys
 import json
 import re
 import random
@@ -11,6 +12,17 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Any, List, Dict, Optional
+
+# -- ProSignin 依赖持久化目录 --------------------------------------------------
+# 容器重启会丢失 pip 安装的包，因此把 ddddocr 等依赖装在挂载卷 /config/pylibs，
+# 并在导入前注入 sys.path，保证 OCR 能力在容器重建后依然可用。
+_PLUGIN_LIB_DIRS = ["/config/pylibs"]
+for _d in _PLUGIN_LIB_DIRS:
+    try:
+        if os.path.isdir(_d) and _d not in _sys.path:
+            _sys.path.insert(0, _d)
+    except Exception:
+        pass
 
 import pytz
 from app.core.config import settings
@@ -40,13 +52,56 @@ def _log_warn(msg):
 def _log_error(msg):
     logger.error(f"[ProSignin] {msg}")
 
+
+def _is_challenge_page(html):
+    """判断是否为反爬/人机验证中间页（雷池、CF挑战等）。
+
+    这类页面本身不含登录态，若用 is_logged_in() 判断会得出"Cookie失效"的
+    错误结论（猪猪 piggo.me 的雷池页就栽在这里）。判定依据是页面文案而非
+    HTTP 状态码，避免命中正文里的普通词汇。
+    """
+    if not html:
+        return False
+    markers = (
+        "雷池", "安全验证", "正在验证", "请稍候", "访问被拒绝", "请求被拦截",
+        "Just a moment", "Checking your browser", "cf-challenge",
+        "Attention Required", "under_challenge",
+        "请耐心等待", "验证通过后将自动完成签到", "签到验证程序加载",
+    )
+    low = html.lower()
+    for m in markers:
+        if m.lower() in low:
+            return True
+    return False
+
+
+def _load_ocr():
+    """加载 ddddocr 识别器（依赖装在挂载卷 /config/pylibs，容器重启不丢）。
+
+    返回 DdddOcr 实例；不可用时抛出带安装指引的 RuntimeError。
+    """
+    for _d in _PLUGIN_LIB_DIRS:
+        try:
+            if os.path.isdir(_d) and _d not in _sys.path:
+                _sys.path.insert(0, _d)
+        except Exception:
+            pass
+    try:
+        import ddddocr
+    except Exception as e:
+        raise RuntimeError(
+            "ddddocr 不可用(" + str(e)[:60] + ")，请安装到挂载卷: "
+            "docker exec moviepilot-v3 sh -c 'uv pip install --target /config/pylibs ddddocr'"
+        )
+    return ddddocr.DdddOcr(show_ad=False)
+
 class ProSignin(_PluginBase):
     """站点自动签到Pro。"""
 
     plugin_name = "站点自动签到Pro"
     plugin_desc = "多站点自动签到，单线程顺序+随机间隔+失败重试，CF智能降级，站点专用签到逻辑，签到历史统计。"
     plugin_icon = "https://img.icons8.com/fluency/96/calendar.png"
-    plugin_version = "3.9.7"
+    plugin_version = "3.9.10"
     plugin_author = "xiaotian"
     author_url = "https://github.com/xiaotian89"
     plugin_config_prefix = "prosignin_"
@@ -457,6 +512,7 @@ class ProSignin(_PluginBase):
 
                 # 我堡(ourbits)：CF Turnstile 对 headless 不可过，但“今日已签”的页面无需过 Turnstile。
                 # 先用 requests 直接取 attendance.php：命中“已经签到过”即判定为已签，避免假失败。
+                _ob_bonus = None
                 if "ourbits" in site_url_lower or "我堡" in site_name:
                     try:
                         import requests as _obreq
@@ -473,7 +529,19 @@ class ProSignin(_PluginBase):
                                 or "今天已经签到过" in _obt or "您今天已经签到" in _obt):
                             _log(f"{site_name}: requests 预检判定今日已签到")
                             return f"✅ {site_name}: 已签到(今日已签)"
-                        _log(f"{site_name}: requests 预检未发现已签标记(页面长度={len(_obt)})，转 Playwright 过 Turnstile")
+                        # 记录签到前魔力值基线：签到成功会 +10（首签）或 +1~+49（连续签到加成）。
+                        # 页头格式固定为 "使用 ]: 270,522.5"，用它做增量判定，比页面文案可靠。
+                        import re as _obr2
+                        # 页头真实结构：<a href="mybonus.php">使用</a>]: 270,522.5
+                        # "使用" 与 "]" 之间隔着 </a> 标签，所以不能写 "使用\s*\]"，
+                        # 直接锚定 "]: 数字" 更稳（取第一个匹配即页头魔力值）。
+                        _bm = _obr2.search(r"\]\s*:\s*([\d,]+(?:\.\d+)?)", _obt)
+                        if _bm:
+                            try:
+                                _ob_bonus = float(_bm.group(1).replace(",", ""))
+                            except Exception:
+                                _ob_bonus = None
+                        _log(f"{site_name}: requests 预检未发现已签标记(页面长度={len(_obt)}, 魔力值基线={_ob_bonus})，转 Playwright 过 Turnstile")
                     except Exception as _obe:
                         _log_warn(f"{site_name}: requests 预检异常: {_obe}")
 
@@ -689,11 +757,20 @@ class ProSignin(_PluginBase):
                                 def _ob_done():
                                     try:
                                         _h = page.content() or ""
-                                        if ("已签到" in _h or "今天已签到" in _h or "签到成功" in _h
-                                                or "Showed Up" in _h):
+                                        # 注意：我堡 attendance.php 在"未签到"状态也始终带着
+                                        # <div class="cf-turnstile">（每次签到都要现场过验证），
+                                        # 所以绝不能用"页面含 cf-turnstile"来否决成功——那等于永远失败。
+                                        # 真正的判据是签到表单是否消失：提交成功后 #attendance 表单不再渲染。
+                                        # 只认明确结果，不再用"表单消失"当判据：
+                                        # Playwright 提交瞬间 page.content() 可能抓到中间页/空白页，
+                                        # 会误报成功（实测 22:03 就误报过一次）。最终成败交给
+                                        # 外层 requests 复核（魔力值增量）决定。
+                                        if "签到成功" in _h or "已经签到过了" in _h \
+                                                or "您今天已经签到" in _h or "今天已经签到" in _h:
                                             return True
-                                        # 仍有 turnstile 组件说明还没过
-                                        return "cf-turnstile" not in _h and "TurnstileCallback" not in _h
+                                        if "次签到" in _h and "获得" in _h and "魔力" in _h:
+                                            return True
+                                        return False
                                     except:
                                         return False
 
@@ -982,14 +1059,76 @@ class ProSignin(_PluginBase):
                 # 浏览器滑块处理成功：优先按成功关键词判定，避免后续CF/cloudflare关键词误判
                 _browser_success = False
                 if auto_click_done and page_source:
-                    if any(_k in page_source for _k in ["签到成功", "簽到成功", "签到完成", "已签到", "今日已签到", "已经签到",
-                                                        "今天已经签过", "已经签过", "今天已经签到", "已經簽到", "今日已簽到",
-                                                        "请勿重复签到", "請勿重複簽到", "获得魔力", "魔力值",
-                                                        "已经签到过了", "请勿重复刷新", "您今天已经签到"]):
+                    # 通用页头字段不能当签到信号："魔力值" 出现在每个页面的信息栏
+                    # （如 "魔力值 [使用]: 266,354.1"），只要页面能打开就会命中，
+                    # 会把"未签到"误判成"签到成功"（我堡 ourbits 曾因此假成功）。
+                    # 只认真正的签到结果文案。
+                    _strong_kw = ["签到成功", "簽到成功", "签到完成", "已签到", "今日已签到", "已经签到",
+                                  "今天已经签过", "已经签过", "今天已经签到", "已經簽到", "今日已簽到",
+                                  "请勿重复签到", "請勿重複簽到", "签到已得", "簽到已得",
+                                  "已经签到过了", "请勿重复刷新", "您今天已经签到"]
+                    _weak_kw = ["获得魔力", "魔力+", "签到奖励", "打卡成功"]
+                    if any(_k in page_source for _k in _strong_kw):
                         _browser_success = True
+                    elif any(_k in page_source for _k in _weak_kw):
+                        # 弱信号：若页面仍挂着 Turnstile 组件，说明人机验证没过，
+                        # 页面只是加载出来而已，不能算成功
+                        _still_tk = ("cf-turnstile" in page_source
+                                     or "TurnstileCallback" in page_source)
+                        _browser_success = not _still_tk
+                    # 仍有人机验证组件 -> 不算成功。
+                    # 例外：我堡每次签到都带 Turnstile 表单，已由上面的魔力值增量单独收口。
+                    _tk_keep = ("cf-turnstile" in page_source or "TurnstileCallback" in page_source)
+                    _is_ob = ("ourbits" in site_url_lower or "我堡" in site_name)
+                    if _browser_success and _tk_keep and not _is_ob:
+                        _browser_success = False
+                        _log(f"{site_name}: 页面仍含 Turnstile 组件，判定未通过人机验证")
 
+                # 我堡(ourbits)专项收口：Playwright 过完 Turnstile 后，用 requests 复核
+                # ①签到表单是否消失 ②魔力值是否增加。两者任一成立即判成功，
+                # 彻底摆脱"页面含 cf-turnstile 就失败"的假阴性。
+                if ("ourbits" in site_url_lower or "我堡" in site_name) and auto_click_done:
+                    try:
+                        import requests as _obv, re as _obr3
+                        _vs = _obv.Session()
+                        _vs.headers.update({
+                            "User-Agent": getattr(site, "ua", "") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                            "Accept-Language": "zh-CN,zh;q=0.9",
+                            "Cookie": site_cookie or "",
+                        })
+                        _vr = _vs.get(sign_url, timeout=getattr(site, "timeout", 30) or 30, verify=False)
+                        _vt = _vr.content.decode("utf-8", errors="replace")
+                        _form_gone = 'id="attendance"' not in _vt
+                        _am = _obr3.search(r"\]\s*:\s*([\d,]+(?:\.\d+)?)", _vt)
+                        _after_bonus = None
+                        if _am:
+                            try:
+                                _after_bonus = float(_am.group(1).replace(",", ""))
+                            except Exception:
+                                _after_bonus = None
+                        _gain = None
+                        if _ob_bonus is not None and _after_bonus is not None:
+                            _gain = round(_after_bonus - _ob_bonus, 2)
+                        _log(f"{site_name}: 复核 表单消失={_form_gone} 魔力值 {_ob_bonus} -> {_after_bonus} (增量={_gain})")
+                        if _form_gone or (_gain is not None and _gain > 0):
+                            result = f"✅ {site_name}: 签到成功(魔力值+{_gain if _gain else 0})"
+                            _browser_success = True
+                        else:
+                            # 实测该站服务端会校验 Turnstile token（空 POST 无效、魔力值不变），
+                            # 无头/仿真浏览器拿不到有效 token。此时应给出可操作结论，
+                            # 不要用"登录成功，签到未确认"这种含糊说法。
+                            result = (f"⚠️ {site_name}: 人机验证未通过(Cloudflare Turnstile，"
+                                      f"需浏览器手动签到；Cookie 仍有效)")
+                            _browser_success = False
+                    except Exception as _ve:
+                        _log_warn(f"{site_name}: 我堡复核异常 {str(_ve)[:50]}")
+
+                _ob_decided = ("ourbits" in site_url_lower or "我堡" in site_name) and auto_click_done
                 if _browser_success:
                     result = f"✅ {site_name}: 签到成功"
+                elif _ob_decided:
+                    pass  # 我堡已有明确结论（成功或 Turnstile 未通过），不再被通用分支覆盖
                 elif page_source and ("audiences" in site_url_lower or "观众" in site_name):
                     # 观众站点：已签到 / Turnstile 未过 / 其他
                     if ("attendance-card--done" in page_source or "今日已签到" in page_source
@@ -1001,7 +1140,29 @@ class ProSignin(_PluginBase):
                         result = f"⚠️ {site_name}: 登录成功，签到未确认"
                 elif not page_source:
                     _log_warn(f"{site_name}: 请求失败，page_source为空，URL: {sign_url}")
-                    result = f"❌ {site_name}: 请求失败"
+                    # 部分站点（如莫妮卡 monikadesign.uk，Unit3D 架构）没有 attendance.php，
+                    # 也就没有签到功能；此时应回退判断首页登录态，登录成功即视为保号成功，
+                    # 而不是报"请求失败"这种误导性结论。
+                    try:
+                        _home = sign_url.rsplit("/", 1)[0] + "/"
+                        import requests as _rq
+                        _hs = _rq.Session()
+                        _hs.headers.update({
+                            "User-Agent": getattr(site, "ua", "") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "Accept": "text/html,*/*;q=0.8",
+                            "Accept-Language": "zh-CN,zh;q=0.9",
+                            "Cookie": site_cookie or "",
+                        })
+                        _hr = _hs.get(_home, timeout=getattr(site, "timeout", 30) or 30, verify=False)
+                        _ht = _hr.content.decode("utf-8", errors="replace")
+                        if _hr.status_code == 200 and SiteUtils.is_logged_in(_ht):
+                            _log(f"{site_name}: 站点无 attendance.php，首页登录正常，按无签到功能保号")
+                            result = f"✅ {site_name}: 无签到功能(登录保号)"
+                        else:
+                            result = f"❌ {site_name}: 请求失败"
+                    except Exception as _he:
+                        _log_warn(f"{site_name}: 首页回退检测异常 {str(_he)[:40]}")
+                        result = f"❌ {site_name}: 请求失败"
                 elif under_challenge(page_source):
                     result = f"⚠️ {site_name}: CF挑战(请开启浏览器仿真)"
                 elif "Attention Required" in page_source or "cf-error" in page_source or "you have been blocked" in page_source.lower() or "Just a moment" in page_source or "cf-challenge" in page_source.lower():
@@ -1025,8 +1186,9 @@ class ProSignin(_PluginBase):
                             result = f"⚠️ {site_name}: 需要点击签到按钮(页面显示签到按钮，未自动签到)"
                     else:
                         result = f"✅ {site_name}: 已签到"
-                elif not SiteUtils.is_logged_in(page_source):
-                    # Cookie失效（优先于图形验证码判断，登录页面通常包含"验证码"关键词，避免误判）
+                elif not SiteUtils.is_logged_in(page_source) and not _is_challenge_page(page_source):
+                    # Cookie失效（排除反爬/人机验证中间页：那类页面本就不含登录态，
+                    # 直接判 Cookie 失效会把雷池/挑战页误报成登录过期，交给后续分支处理）
                     result = f"❌ {site_name}: Cookie失效"
                 elif "请耐心等待" in page_source or "验证通过后将自动完成签到" in page_source or "签到验证程序加载" in page_source or "Just a moment" in page_source or "Checking your browser" in page_source or "cf-challenge" in page_source.lower() or "under_challenge" in page_source.lower():
                     # CF5秒盾页面（我堡、观众等站点），需要浏览器仿真等待验证通过
@@ -1043,7 +1205,7 @@ class ProSignin(_PluginBase):
                         result = f"⚠️ {site_name}: 雷池验证中(浏览器仿真已开启，等待超时)"
                     else:
                         result = f"⚠️ {site_name}: 雷池验证(请在站点管理开启浏览器仿真)"
-                elif not SiteUtils.is_logged_in(page_source):
+                elif not SiteUtils.is_logged_in(page_source) and not _is_challenge_page(page_source):
                     result = f"❌ {site_name}: Cookie失效"
                 elif "springsunday" in site_url_lower or "春天" in site_name or "keepfrds" in site_url_lower or "朋友" in site_name:
                     # 春天/朋友站点：无签到按钮，登录成功即保号
@@ -1306,8 +1468,7 @@ class ProSignin(_PluginBase):
 
             # OCR 引擎（懒加载，缺失则降级）
             try:
-                import ddddocr
-                _ocr = ddddocr.DdddOcr(show_ad=False)
+                _ocr = _load_ocr()
             except Exception as _e:
                 return f"⚠️ {site_name}: 需要图形验证码(OCR组件缺失: {str(_e)[:40]})"
 
@@ -1595,8 +1756,7 @@ class ProSignin(_PluginBase):
 
             # OCR 引擎
             try:
-                import ddddocr
-                _ocr = ddddocr.DdddOcr(show_ad=False)
+                _ocr = _load_ocr()
             except Exception as _e:
                 return f"⚠️ {site_name}: 需要图形验证码(OCR组件缺失: {str(_e)[:40]})"
 
@@ -1727,14 +1887,23 @@ class ProSignin(_PluginBase):
             if "已簽到" in ht or "已签到" in ht:
                 return f"✅ {site_name}: 已签到"
 
+            # 签到前魔力值基线（签到成功 +10），用于结果兜底判定
+            import re as _re_bonus
+            _b0 = None
+            _bm0 = _re_bonus.search(r"魔力值\s*:\s*([\d,\.]+)", ht)
+            if _bm0:
+                try:
+                    _b0 = float(_bm0.group(1).replace(",", ""))
+                except Exception:
+                    _b0 = None
+
             try:
-                import ddddocr
-                _ocr = ddddocr.DdddOcr(show_ad=False)
+                _ocr = _load_ocr()
             except Exception as _e:
                 return f"⚠️ {site_name}: 需要图形验证码(OCR组件缺失: {str(_e)[:40]})"
 
             sign_page = base + "/plugin_sign-in.php"
-            for _attempt in range(3):
+            for _attempt in range(6):
                 sp = s.get(sign_page, timeout=timeout, verify=False)
                 spt = sp.content.decode("utf-8", errors="replace")
                 if "已簽到" in spt or "已签到" in spt:
@@ -1748,7 +1917,9 @@ class ProSignin(_PluginBase):
                 if not img or not img.content:
                     continue
                 txt = (_ocr.classification(img.content) or "").strip()
-                if not txt:
+                # 皇后验证码固定 6 位字母数字，识别结果长度不符直接换一张，别浪费提交次数
+                if len(txt) != 6 or not _re.match(r"^[A-Za-z0-9]{6}$", txt):
+                    _log_warn(f"{site_name}: 验证码识别结果异常('{txt}' {len(txt)}位)，换一张重试")
                     continue
                 r2 = s.post(base + "/plugin_sign-in.php?cmd=signin",
                             data={"imagehash": mh.group(1), "imagestring": txt},
@@ -1765,6 +1936,29 @@ class ProSignin(_PluginBase):
                     return f"✅ {site_name}: 已签到(今日已签)"
                 if "验证码" in body or "錯誤" in body or "错误" in body:
                     continue  # 验证码识别错误，重试
+                # 其它未知响应：可能已签（服务端静默 +10），用魔力值增量做最终判定
+                try:
+                    _hp = s.get(base + "/index.php", timeout=timeout, verify=False)
+                    _hpt = _hp.content.decode("utf-8", errors="replace")
+                    _bm1 = _re_bonus.search(r"魔力值\s*:\s*([\d,\.]+)", _hpt)
+                    if _bm1 and _b0 is not None:
+                        _b1 = float(_bm1.group(1).replace(",", ""))
+                        if _b1 > _b0:
+                            return f"✅ {site_name}: 签到成功(魔力值+{round(_b1 - _b0, 1)})"
+                except Exception:
+                    pass
+                continue
+            # 6 次都失败：最后一次确认今日是否已签（服务端对重复签到返回 state:false 无 msg）
+            try:
+                _hp = s.get(base + "/index.php", timeout=timeout, verify=False)
+                _hpt = _hp.content.decode("utf-8", errors="replace")
+                _bm1 = _re_bonus.search(r"魔力值\s*:\s*([\d,\.]+)", _hpt)
+                if _bm1 and _b0 is not None:
+                    _b1 = float(_bm1.group(1).replace(",", ""))
+                    if _b1 > _b0:
+                        return f"✅ {site_name}: 签到成功(魔力值+{round(_b1 - _b0, 1)})"
+            except Exception:
+                pass
             return f"⚠️ {site_name}: 签到未确认(验证码识别失败)"
         except Exception as e:
             return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
@@ -1802,44 +1996,57 @@ class ProSignin(_PluginBase):
             if not (qid_match and options):
                 return f"⚠️ {site_name}: 签到页面结构变化(无法自动作答)"
 
-            # 内置题库：天干地支
-            tiangan = "甲乙丙丁戊己庚辛壬癸"
-            dizhi = "子丑寅卯辰巳午未申酉戌亥"
             qtext = q_match.group(1) if q_match else ""
-            ans_char = None
-            if "天干" in qtext:
-                ans_char = tiangan[-1] if ("最后" in qtext or "末" in qtext) else tiangan[0]
-            elif "地支" in qtext:
-                ans_char = dizhi[-1] if ("最后" in qtext or "末" in qtext) else dizhi[0]
+            opt_map = {x.strip(): v for v, x in options}   # 选项文本 -> value
+            multi = ("多选" in page) or ("哪三部" in qtext) or ("哪三" in qtext) \
+                    or ("哪些" in qtext) or ("多選" in page)
 
-            if not ans_char:
-                # 未收录的题目：选择"不会"跳过
-                r2 = s.post(url, data={"questionid": qid_match.group(1), "wantskip": "不会",
-                                       "usercomment": "此刻心情:无"}, timeout=timeout, verify=False)
-                t2 = r2.content.decode("utf-8", errors="replace")
-                if "签到成功" in t2:
-                    return f"✅ {site_name}: 签到成功(跳过答题)"
-                return f"⚠️ {site_name}: 遇到未收录题目，已请求跳过"
-
-            answer_val = None
-            for val, txt in options:
-                if txt.strip().startswith(ans_char):
-                    answer_val = val
+            # ---- 内置题库（键 = 题干特征词，值 = 正确选项文本列表）----
+            _BANK = {
+                "嘻哈三部曲": ["绝世高手", "婚纱照", "浮游目击者"],
+            }
+            chosen = []
+            for k, ans in _BANK.items():
+                if k in qtext:
+                    chosen = [opt_map[a] for a in ans if a in opt_map]
                     break
-            if not answer_val:
-                return f"⚠️ {site_name}: 未能匹配答案选项"
 
-            r3 = s.post(url, data={
-                "questionid": qid_match.group(1),
-                "choice[]": answer_val,
-                "usercomment": "此刻心情:无",
-                "submit": "提交",
-            }, timeout=timeout, verify=False)
+            if not chosen:
+                # 天干地支（单选）
+                tiangan = "甲乙丙丁戊己庚辛壬癸"
+                dizhi = "子丑寅卯辰巳午未申酉戌亥"
+                ans_char = None
+                if "天干" in qtext:
+                    ans_char = tiangan[-1] if ("最后" in qtext or "末" in qtext) else tiangan[0]
+                elif "地支" in qtext:
+                    ans_char = dizhi[-1] if ("最后" in qtext or "末" in qtext) else dizhi[0]
+                if ans_char:
+                    for val, txt in options:
+                        if txt.strip().startswith(ans_char):
+                            chosen = [val]
+                            break
+
+            if not chosen:
+                # 题库未收录：注意 wantskip 在该站无效（服务端返回"没有选择选项哦"），
+                # 因此改为随便选一个，至少让站点走完签到流程。
+                if multi:
+                    chosen = [options[0][0], options[1][0]] if len(options) >= 2 else [options[0][0]]
+                else:
+                    chosen = [options[0][0]]
+                _log_warn(f"{site_name}: 题库未收录该题，已随机作答({len(chosen)}项): {qtext[:40]}")
+
+            # ---- 提交（多选：choice[] 重复传多个值）----
+            data = [("questionid", qid_match.group(1)),
+                    ("usercomment", "此刻心情:无"),
+                    ("submit", "提交")]
+            for v in chosen:
+                data.append(("choice[]", v))
+            r3 = s.post(url, data=data, timeout=timeout, verify=False)
             t3 = r3.content.decode("utf-8", errors="replace")
-            if "签到成功" in t3 or "回答正确" in t3 or "恭喜" in t3:
+            if "签到成功" in t3 or "回答正确" in t3 or "恭喜" in t3 or "今天已经签过到" in t3:
                 return f"✅ {site_name}: 签到成功"
-            if "回答错误" in t3 or "抱歉" in t3:
-                return f"⚠️ {site_name}: 答题错误(请浏览器手动签到)"
+            if "回答错误" in t3 or "没有选择选项" in t3:
+                return f"⚠️ {site_name}: 答题未通过(请浏览器手动签到)"
             return f"⚠️ {site_name}: 签到未确认"
         except Exception as e:
             return f"❌ {site_name}: 签到异常: {str(e)[:50]}"
